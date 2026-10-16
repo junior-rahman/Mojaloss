@@ -1,0 +1,61 @@
+[versions]
+agp = "8.13.2"
+kotlin = "2.3.21"
+composeBom = "2025.10.01"
+coroutines = "1.10.2"
+activity = "1.10.1"
+lifecycle = "2.9.4"
+core = "1.16.0"
+navigation = "1.0.0"
+serialization = "1.9.0"
+coil = "3.3.0"
+window = "1.5.1"
+jellyfin = "1.8.12"
+media3 = "1.11.1"
+junit = "4.13.2"
+androidTest = "1.3.0"
+espresso = "3.7.0"
+
+[libraries]
+androidx-core = { module = "androidx.core:core-ktx", version.ref = "core" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity" }
+androidx-lifecycle-runtime = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "lifecycle" }
+androidx-lifecycle-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-lifecycle-viewmodel = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+androidx-window = { module = "androidx.window:window", version.ref = "window" }
+compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
+compose-ui = { module = "androidx.compose.ui:ui" }
+compose-tooling = { module = "androidx.compose.ui:ui-tooling" }
+compose-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
+compose-material3 = { module = "androidx.compose.material3:material3" }
+compose-icons = { module = "androidx.compose.material:material-icons-extended" }
+compose-foundation = { module = "androidx.compose.foundation:foundation" }
+compose-ui-test = { module = "androidx.compose.ui:ui-test-junit4" }
+compose-test-manifest = { module = "androidx.compose.ui:ui-test-manifest" }
+navigation-runtime = { module = "androidx.navigation3:navigation3-runtime", version.ref = "navigation" }
+navigation-ui = { module = "androidx.navigation3:navigation3-ui", version.ref = "navigation" }
+coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
+coil-network = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil" }
+jellyfin-core = { module = "org.jellyfin.sdk:jellyfin-core", version.ref = "jellyfin" }
+media3-exoplayer = { module = "androidx.media3:media3-exoplayer", version.ref = "media3" }
+media3-hls = { module = "androidx.media3:media3-exoplayer-hls", version.ref = "media3" }
+media3-dash = { module = "androidx.media3:media3-exoplayer-dash", version.ref = "media3" }
+media3-ui = { module = "androidx.media3:media3-ui", version.ref = "media3" }
+media3-datasource = { module = "androidx.media3:media3-datasource", version.ref = "media3" }
+media3-database = { module = "androidx.media3:media3-database", version.ref = "media3" }
+media3-okhttp = { module = "androidx.media3:media3-datasource-okhttp", version.ref = "media3" }
+junit = { module = "junit:junit", version.ref = "junit" }
+androidx-test-junit = { module = "androidx.test.ext:junit", version.ref = "androidTest" }
+androidx-test-espresso = { module = "androidx.test.espresso:espresso-core", version.ref = "espresso" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+

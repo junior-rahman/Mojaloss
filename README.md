@@ -8,10 +8,16 @@ player adapts to the available window and supported measured folding panes.
 
 ## Current milestone
 
-Version 0.1.8 adds a final **See all** action card to the featured stack. It opens
-movies and series together, newest release first. The action is separate from
-playable titles, preserves the underneath-card animation, and supports touch,
-accessibility actions and reduced motion.
+Version 0.1.8 opens all releases directly when the viewer deliberately swipes
+right on the last featured title. Forward/left continuation at that same boundary
+also opens it. There is no extra card to tap. Short gestures stay on the title,
+Back retains selection, and the catalog opens movies and series together with
+newest releases first.
+
+Shared finite page fades and press feedback make navigation, cards and supporting
+pages consistent. App Reduce motion, disabled system animation or battery saver
+turn custom motion off. Player/trailer route ownership transfers instantly;
+their existing control animations remain independent of playback.
 
 Home keeps automatic Hindi, English and International movie/series sections.
 Title queries explicitly disable Jellyfin's collection grouping, so a server
@@ -45,7 +51,6 @@ that the customer's specific live-server error has been reproduced.
 
 ## Build
 
-
 Install JDK 17 and the Android SDK platform 36/build tools 35.0.0. Set `JAVA_HOME`
 and `ANDROID_HOME`, or configure the SDK through Android Studio. The project
 includes Gradle 8.13's checksum-pinned wrapper.
@@ -69,6 +74,12 @@ Debug application ID: `com.mojaloss.android.debug`. Release application ID:
 `com.mojaloss.android`. APK output: `app/build/outputs/apk/debug/app-debug.apk`.
 The delivered APK uses a development signing key; production signing is a later
 release step.
+
+The public source omits four optional generated debug-preview PNGs. Its debug
+preview uses the existing artwork placeholders when those files are absent; live
+media artwork still comes from the verified server. The downloadable test APK
+retains the original preview images. No image reconstruction files or encoded
+image payloads are published in the source tree.
 
 ## Modules and integration
 
