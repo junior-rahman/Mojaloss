@@ -1,0 +1,680 @@
+name: Exact frozen Android cohort through MCP encrypted input
+
+on:
+  push:
+    branches: [ci/mojaloss-full-runtime-011]
+    paths: [.github/workflows/mojaloss-full-runtime-mcp.yml]
+
+permissions:
+  contents: write # Publish only the public recipient; input data is encrypted.
+  actions: read
+
+concurrency:
+  group: mojaloss-full-runtime
+  cancel-in-progress: false
+
+jobs:
+  native:
+    if: >-
+      github.repository == 'junior-rahman/Mojaloss' &&
+      github.repository_id == '1421546274' &&
+      github.ref == 'refs/heads/ci/mojaloss-full-runtime-011' &&
+      github.run_attempt == '1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      # No checkout or executable remote source. Only the reviewed helper below
+      # runs before the authenticated and exact-hash-pinned private ZIP admission.
+      - name: Install the reviewed one-run encrypted input helper
+        id: install_helper
+        run: |
+          python3 - <<'PY_INSTALL_HELPER'
+          from pathlib import Path
+          import hashlib, os, subprocess
+          content = r'''#!/usr/bin/env python3
+          """One-run encrypted CI transport. Python stdlib + the runner's OpenSSL only.
+
+          `recipient` and `receive` run in the SAME push job. Only those modes receive a
+          scoped MCP_TRANSPORT_TOKEN. `seal` is local-only and performs no HTTP requests.
+          The public recipient must independently match the trusted job-step fingerprint
+          before `seal` is used. Public repository files alone do not authenticate it.
+          """
+          import argparse
+          import base64
+          import binascii
+          import hashlib
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+          import re
+          import secrets
+          import shutil
+          import stat
+          import subprocess
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from zipfile import ZipFile
+
+          REPOSITORY = 'junior-rahman/Mojaloss'
+          REPOSITORY_ID = '1421546274'
+          TRIGGER_BRANCH = 'ci/mojaloss-full-runtime-011'
+          API = 'https://api.github.com/repos/' + REPOSITORY
+          SOURCE_HEAD = '650cd200f10aace6f9a391a4079f4b92b0e26753'
+          ZIP_BYTES = 98478997
+          ZIP_SHA256 = 'c4d4b1d0fef8757ca6515ab16d6e8bc3d4beea66a305d4e1274556ee3651590b'
+          MANIFEST_SHA256 = '7956e4ca24c22cf68141b9406d42a284211816cfd8e12e881e27a2b8697f1e00'
+          CHUNK_BYTES = 4 * 1024**2
+          MAX_CHUNKS = 512
+          MAX_CIPHER_BYTES = 110 * 1024**2
+          MAX_UNPACKED_BYTES = 250 * 1024**2
+          MAX_METADATA_BYTES = 1024**2
+          WAIT_SECONDS = 3600
+          POLL_SECONDS = 10
+
+
+          class TransportFailure(RuntimeError):
+              """Message is a fixed, non-sensitive failure class, never remote text."""
+
+
+          def require(condition, code):
+              if not condition:
+                  raise TransportFailure(code)
+
+
+          def is_hex(value, length):
+              return isinstance(value, str) and re.fullmatch('[0-9a-f]{' + str(length) + '}', value) is not None
+
+
+          def canonical(value):
+              return (json.dumps(value, sort_keys=True, separators=(',', ':')) + '\n').encode('utf-8')
+
+
+          def private_write(path, data):
+              with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as output:
+                  output.write(data)
+
+
+          def file_digest(path):
+              h = hashlib.sha256()
+              count = 0
+              with Path(path).open('rb') as stream:
+                  for block in iter(lambda: stream.read(1024**2), b''):
+                      h.update(block)
+                      count += len(block)
+              return count, h.hexdigest()
+
+
+          def context(environ=None):
+              env = os.environ if environ is None else environ
+              require(env.get('GITHUB_REPOSITORY') == REPOSITORY and env.get('GITHUB_REPOSITORY_ID') == REPOSITORY_ID,
+                      'repository_context')
+              require(env.get('GITHUB_EVENT_NAME') == 'push' and env.get('GITHUB_REF') == 'refs/heads/' + TRIGGER_BRANCH,
+                      'trigger_context')
+              require(env.get('GITHUB_RUN_ATTEMPT') == '1', 'rerun_forbidden')
+              run_id = env.get('GITHUB_RUN_ID', '')
+              require(re.fullmatch('[1-9][0-9]{0,19}', run_id) is not None, 'run_id')
+              head = env.get('GITHUB_SHA', '')
+              require(is_hex(head, 40), 'trigger_head')
+              return {'repository': REPOSITORY, 'repository_id': REPOSITORY_ID,
+                      'run_id': run_id, 'run_attempt': 1, 'trigger_head': head,
+                      'trigger_branch': TRIGGER_BRANCH, 'transport_branch': 'ci-transport/run-' + run_id}
+
+
+          def private_directory(ctx, create=False):
+              parent = Path(os.environ['RUNNER_TEMP']).resolve(strict=True)
+              require(parent.is_dir(), 'runner_temp')
+              path = parent / ('mojaloss-mcp-transport-run-' + ctx['run_id'])
+              if create:
+                  path.mkdir(mode=0o700)
+              mode = path.lstat().st_mode
+              require(stat.S_ISDIR(mode) and not stat.S_ISLNK(mode) and stat.S_IMODE(mode) == 0o700, 'private_directory')
+              return path
+
+
+          def cleanup(ctx):
+              parent = Path(os.environ['RUNNER_TEMP']).resolve(strict=True)
+              path = parent / ('mojaloss-mcp-transport-run-' + ctx['run_id'])
+              if path.exists() or path.is_symlink():
+                  require(not path.is_symlink() and path.is_dir() and path.parent == parent, 'cleanup_directory')
+                  shutil.rmtree(path)
+
+
+          def cleanup_input():
+              # The job's always() cleanup invokes this only after admission/runtime have
+              # completed or failed. Never accept a cleanup path from public metadata.
+              parent = Path(os.environ['RUNNER_TEMP']).resolve(strict=True)
+              path = parent / 'mojaloss-private-input'
+              if path.exists() or path.is_symlink():
+                  require(not path.is_symlink() and path.is_dir() and path.parent == parent, 'cleanup_input_directory')
+                  shutil.rmtree(path)
+
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, request, response, code, message, headers, url):
+                  return None
+
+
+          class GitHub:
+              def __init__(self, token):
+                  require(isinstance(token, str) and bool(token), 'token_missing')
+                  self.token = token
+                  self.opener = urllib.request.build_opener(NoRedirect)
+
+              def json(self, method, path, value=None, allow_404=False, max_bytes=MAX_METADATA_BYTES):
+                  # All callers construct a fixed same-repository API path. No URL from
+                  # recipient/marker/blob metadata is ever accepted or followed.
+                  require(method in ('GET', 'POST', 'PUT') and path.startswith('/') and not path.startswith('//')
+                          and '\\' not in path and '#' not in path, 'api_path')
+                  url = API + path
+                  parsed = urllib.parse.urlsplit(url)
+                  require(parsed.scheme == 'https' and parsed.hostname == 'api.github.com' and parsed.port is None
+                          and not parsed.username and not parsed.password, 'api_origin')
+                  headers = {'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2026-03-10',
+                             'User-Agent': 'MojaLoss-one-run-encrypted-input', 'Cache-Control': 'no-cache',
+                             'Authorization': 'Bearer ' + self.token}
+                  data = canonical(value) if value is not None else None
+                  if data is not None:
+                      headers['Content-Type'] = 'application/json'
+                  request = urllib.request.Request(url, data=data, headers=headers, method=method)
+                  try:
+                      with self.opener.open(request, timeout=60) as result:
+                          require(result.status in (200, 201), 'api_status_' + str(result.status))
+                          body = result.read(max_bytes + 1)
+                  except urllib.error.HTTPError as failure:
+                      status = failure.code
+                      failure.close()
+                      if allow_404 and status == 404:
+                          return None
+                      raise TransportFailure('api_status_' + str(status)) from None
+                  except (urllib.error.URLError, TimeoutError, OSError):
+                      raise TransportFailure('api_network') from None
+                  require(len(body) <= max_bytes, 'api_response_bound')
+                  try:
+                      return json.loads(body)
+                  except (ValueError, UnicodeError):
+                      raise TransportFailure('api_json') from None
+
+
+          def decode_base64(value):
+              require(isinstance(value, str), 'base64_type')
+              try:
+                  return base64.b64decode(b''.join(value.encode('ascii').split()), validate=True)
+              except (ValueError, UnicodeError, binascii.Error):
+                  raise TransportFailure('base64_encoding') from None
+
+
+          def contents(api, branch, filename, allow_404=False):
+              require(re.fullmatch('ci-transport/run-[1-9][0-9]{0,19}', branch) is not None
+                      and filename in ('recipient.json', 'input.json'), 'contents_path')
+              path = '/contents/' + filename + '?ref=' + urllib.parse.quote(branch, safe='')
+              result = api.json('GET', path, allow_404=allow_404)
+              if result is None:
+                  return None
+              require(isinstance(result, dict) and result.get('type') == 'file'
+                      and result.get('encoding') == 'base64' and type(result.get('size')) is int
+                      and 0 < result['size'] <= MAX_METADATA_BYTES, 'contents_metadata')
+              decoded = decode_base64(result.get('content'))
+              require(len(decoded) == result['size'], 'contents_size')
+              require(result.get('sha') == hashlib.sha1(b'blob ' + str(len(decoded)).encode() + b'\0' + decoded).hexdigest(),
+                      'contents_git_sha1')
+              try:
+                  value = json.loads(decoded)
+              except (ValueError, UnicodeError):
+                  raise TransportFailure('contents_json') from None
+              require(isinstance(value, dict), 'contents_object')
+              return value
+
+
+          def openssl(args, input_bytes=None, timeout=120):
+              try:
+                  result = subprocess.run(['openssl', *args], input=input_bytes, stdout=subprocess.PIPE,
+                                          stderr=subprocess.PIPE, timeout=timeout, check=False)
+              except (subprocess.TimeoutExpired, OSError):
+                  raise TransportFailure('openssl_execution') from None
+              require(result.returncode == 0, 'openssl_nonzero')
+              return result.stdout
+
+
+          def certificate_sha256(pem):
+              require(isinstance(pem, str) and 0 < len(pem) <= 16384, 'certificate_bound')
+              try:
+                  encoded = pem.encode('ascii')
+              except UnicodeError:
+                  raise TransportFailure('certificate_encoding') from None
+              der = openssl(['x509', '-inform', 'PEM', '-outform', 'DER'], input_bytes=encoded)
+              return hashlib.sha256(der).hexdigest()
+
+
+          def recipient():
+              ctx = context()
+              directory = private_directory(ctx, create=True)
+              try:
+                  key = directory / 'recipient-private.pem'
+                  cert = directory / 'recipient-public.pem'
+                  openssl(['req', '-new', '-newkey', 'rsa:3072', '-x509', '-sha256', '-days', '1', '-nodes',
+                           '-keyout', str(key), '-out', str(cert), '-subj', '/CN=MojaLoss CI ephemeral recipient'])
+                  key.chmod(0o600)
+                  cert.chmod(0o600)
+                  pem = cert.read_text('ascii')
+                  public = {'schema_version': 1, 'kind': 'mojaloss_one_run_cms_recipient', **ctx,
+                            'nonce': secrets.token_hex(32), 'certificate_pem': pem,
+                            'certificate_sha256': certificate_sha256(pem),
+                            'certificate_fingerprint_encoding': 'SHA256-DER',
+                            'encryption': 'CMS-AES-256-GCM-RSA-OAEP-SHA256-MGF1-SHA256',
+                            'source_head': SOURCE_HEAD, 'zip_bytes': ZIP_BYTES, 'zip_sha256': ZIP_SHA256,
+                            'payload_manifest_sha256': MANIFEST_SHA256}
+                  private_write(directory / 'recipient.json', canonical(public))
+                  api = GitHub(os.environ.get('MCP_TRANSPORT_TOKEN'))
+                  ref = api.json('POST', '/git/refs', {'ref': 'refs/heads/' + ctx['transport_branch'], 'sha': ctx['trigger_head']})
+                  require(ref.get('ref') == 'refs/heads/' + ctx['transport_branch']
+                          and ref.get('object', {}).get('sha') == ctx['trigger_head'], 'published_ref_binding')
+                  result = api.json('PUT', '/contents/recipient.json',
+                                    {'message': 'Publish public ephemeral CI recipient for run ' + ctx['run_id'],
+                                     'branch': ctx['transport_branch'], 'content': base64.b64encode(canonical(public)).decode('ascii')})
+                  require(result.get('content', {}).get('path') == 'recipient.json', 'published_recipient_path')
+                  require(contents(api, ctx['transport_branch'], 'recipient.json') == public, 'published_recipient_readback')
+                  output = os.environ['GITHUB_OUTPUT']
+                  with Path(output).open('a') as stream:
+                      for field in ('certificate_sha256', 'nonce', 'transport_branch'):
+                          stream.write(field + '=' + public[field] + '\n')
+                  print('Public ephemeral recipient published; independently bind its DER fingerprint to this trusted job.')
+              except BaseException:
+                  cleanup(ctx)
+                  raise
+
+
+          def validate_recipient(value, expected_fingerprint=None, ctx=None):
+              require(isinstance(value, dict) and value.get('schema_version') == 1
+                      and value.get('kind') == 'mojaloss_one_run_cms_recipient', 'recipient_schema')
+              require(value.get('repository') == REPOSITORY and value.get('repository_id') == REPOSITORY_ID
+                      and value.get('trigger_branch') == TRIGGER_BRANCH and value.get('run_attempt') == 1,
+                      'recipient_context')
+              require(isinstance(value.get('run_id'), str) and re.fullmatch('[1-9][0-9]{0,19}', value['run_id']) is not None
+                      and value.get('transport_branch') == 'ci-transport/run-' + value['run_id']
+                      and is_hex(value.get('trigger_head'), 40) and is_hex(value.get('nonce'), 64), 'recipient_binding')
+              require(value.get('source_head') == SOURCE_HEAD and value.get('zip_bytes') == ZIP_BYTES
+                      and value.get('zip_sha256') == ZIP_SHA256 and value.get('payload_manifest_sha256') == MANIFEST_SHA256,
+                      'recipient_payload_pins')
+              require(value.get('encryption') == 'CMS-AES-256-GCM-RSA-OAEP-SHA256-MGF1-SHA256'
+                      and value.get('certificate_fingerprint_encoding') == 'SHA256-DER', 'recipient_algorithm')
+              fingerprint = certificate_sha256(value.get('certificate_pem'))
+              require(fingerprint == value.get('certificate_sha256'), 'recipient_certificate_digest')
+              if expected_fingerprint is not None:
+                  require(is_hex(expected_fingerprint, 64) and fingerprint == expected_fingerprint, 'trusted_fingerprint')
+              if ctx is not None:
+                  require(all(value.get(k) == v for k, v in ctx.items()), 'recipient_job_binding')
+              return value
+
+
+          def validate_marker(marker, public):
+              require(isinstance(marker, dict) and marker.get('schema_version') == 1
+                      and marker.get('kind') == 'mojaloss_one_run_cms_input', 'marker_schema')
+              for field in ('repository', 'repository_id', 'run_id', 'run_attempt', 'trigger_head', 'trigger_branch',
+                            'transport_branch', 'nonce', 'certificate_sha256', 'source_head', 'zip_bytes',
+                            'zip_sha256', 'payload_manifest_sha256', 'encryption'):
+                  require(marker.get(field) == public.get(field), 'marker_binding_' + field)
+              count, size = marker.get('chunk_count'), marker.get('cipher_bytes')
+              require(type(count) is int and 1 <= count <= MAX_CHUNKS and type(size) is int
+                      and ZIP_BYTES < size <= MAX_CIPHER_BYTES and is_hex(marker.get('cipher_sha256'), 64),
+                      'cipher_bounds')
+              rows = marker.get('chunks')
+              require(isinstance(rows, list) and len(rows) == count, 'chunk_count')
+              total, seen = 0, set()
+              for index, row in enumerate(rows):
+                  require(isinstance(row, dict) and set(row) == {'index', 'git_blob_sha1', 'bytes', 'sha256'}
+                          and type(row.get('index')) is int and row['index'] == index, 'chunk_order')
+                  require(type(row.get('bytes')) is int and 1 <= row['bytes'] <= CHUNK_BYTES
+                          and is_hex(row.get('git_blob_sha1'), 40) and is_hex(row.get('sha256'), 64), 'chunk_bounds')
+                  require(row['git_blob_sha1'] not in seen, 'duplicate_chunk')
+                  seen.add(row['git_blob_sha1'])
+                  total += row['bytes']
+              require(total == size, 'cipher_total')
+              return marker
+
+
+          def poll_marker(api, public, clock=time.monotonic, wait=time.sleep):
+              deadline = clock() + WAIT_SECONDS
+              while True:
+                  marker = contents(api, public['transport_branch'], 'input.json', allow_404=True)
+                  if marker is not None:
+                      return validate_marker(marker, public)
+                  remaining = deadline - clock()
+                  require(remaining > 0, 'input_timeout')
+                  wait(min(POLL_SECONDS, remaining))
+
+
+          def download_cipher(api, marker, target):
+              aggregate, count = hashlib.sha256(), 0
+              with os.fdopen(os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as output:
+                  for row in marker['chunks']:
+                      blob = api.json('GET', '/git/blobs/' + row['git_blob_sha1'], max_bytes=6 * 1024**2)
+                      require(isinstance(blob, dict) and blob.get('sha') == row['git_blob_sha1']
+                              and blob.get('encoding') == 'base64' and blob.get('size') == row['bytes'], 'blob_metadata')
+                      data = decode_base64(blob.get('content'))
+                      require(len(data) == row['bytes'] and len(data) <= CHUNK_BYTES
+                              and hashlib.sha256(data).hexdigest() == row['sha256'], 'blob_digest')
+                      git_sha = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+                      require(git_sha == row['git_blob_sha1'], 'blob_git_sha1')
+                      count += len(data)
+                      require(count <= marker['cipher_bytes'] and count <= MAX_CIPHER_BYTES, 'cipher_download_bound')
+                      output.write(data)
+                      aggregate.update(data)
+              require(count == marker['cipher_bytes'] and aggregate.hexdigest() == marker['cipher_sha256'], 'cipher_digest')
+
+
+          def decrypt_to_gate(cipher, key, cert, clear, expected_bytes, expected_sha256):
+              # OpenSSL can emit unauthenticated partial plaintext before returning a GCM
+              # failure. Its output remains in private staging and is NEVER opened by a
+              # ZIP reader or executed unless BOTH return status and exact pins succeed.
+              require(not Path(clear).exists(), 'plaintext_exists')
+              private_write(clear, b'')
+              openssl(['cms', '-decrypt', '-binary', '-inform', 'DER', '-in', str(cipher),
+                       '-recip', str(cert), '-inkey', str(key), '-out', str(clear)])
+              require(file_digest(clear) == (expected_bytes, expected_sha256), 'plaintext_exact_pin')
+
+
+          def extract_payload(archive, destination):
+              # Same reviewed ZIP safety checks; no code from the ZIP is used here.
+              destination = Path(destination)
+              require(not destination.exists(), 'payload_destination_exists')
+              with ZipFile(archive) as z:
+                  infos = z.infolist()
+                  require(1 <= len(infos) <= 10000, 'payload_member_count')
+                  names, total = set(), 0
+                  for item in infos:
+                      p = PurePosixPath(item.filename)
+                      require(p.parts and not p.is_absolute() and '..' not in p.parts and '\\' not in item.filename
+                              and 1 <= len(item.filename) <= 512 and str(p) == item.filename.rstrip('/'), 'payload_path')
+                      mode = item.external_attr >> 16
+                      require(item.filename not in names and not stat.S_ISLNK(mode) and not item.flag_bits & 1,
+                              'payload_duplicate_symlink_encryption')
+                      require(not stat.S_IFMT(mode) or stat.S_ISREG(mode) or stat.S_ISDIR(mode), 'payload_special_file')
+                      require(p.suffix.lower() not in ('.jks', '.keystore', '.p12', '.pfx'), 'payload_signing_key')
+                      names.add(item.filename)
+                      total += item.file_size
+                      require(total <= MAX_UNPACKED_BYTES, 'payload_unpacked_bound')
+                  require('payload-manifest.json' in names, 'payload_manifest_missing')
+                  manifest = z.read('payload-manifest.json')
+                  require(hashlib.sha256(manifest).hexdigest() == MANIFEST_SHA256, 'payload_manifest_pin')
+                  manifest_value = json.loads(manifest)
+                  require(manifest_value.get('source_head') == SOURCE_HEAD, 'payload_source_pin')
+                  destination.mkdir(mode=0o700)
+                  for item in infos:
+                      target = destination / item.filename
+                      if item.is_dir():
+                          target.mkdir(mode=0o700, parents=True, exist_ok=True)
+                          continue
+                      target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                      with z.open(item) as source, os.fdopen(os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as output:
+                          for block in iter(lambda: source.read(1024**2), b''):
+                              output.write(block)
+
+
+          def receive():
+              ctx = context()
+              directory = private_directory(ctx)
+              destination = Path(os.environ['INPUT_ROOT'])
+              # The workflow chooses the sole expected path, not public marker metadata.
+              require(destination == Path(os.environ['RUNNER_TEMP']) / 'mojaloss-private-input', 'input_root')
+              require(not destination.exists() and not destination.is_symlink(), 'payload_destination_exists')
+              extracted = False
+              try:
+                  public = validate_recipient(json.loads((directory / 'recipient.json').read_bytes()), ctx=ctx)
+                  api = GitHub(os.environ.get('MCP_TRANSPORT_TOKEN'))
+                  require(contents(api, ctx['transport_branch'], 'recipient.json') == public, 'recipient_changed')
+                  marker = poll_marker(api, public)
+                  cipher, clear = directory / 'ciphertext.cms', directory / 'clear-input.zip'
+                  download_cipher(api, marker, cipher)
+                  decrypt_to_gate(cipher, directory / 'recipient-private.pem', directory / 'recipient-public.pem',
+                                  clear, ZIP_BYTES, ZIP_SHA256)
+                  # Erase the ephemeral decryption key before reading/extracting the ZIP;
+                  # the final cleanup also covers every preceding failure path.
+                  (directory / 'recipient-private.pem').unlink()
+                  extract_payload(clear, destination)
+                  extracted = True
+                  receipt = {'schema_version': 1, 'status': 'DECRYPTED_EXACT_ZIP_NOT_YET_FULLY_ADMITTED', **ctx,
+                             'certificate_sha256': public['certificate_sha256'], 'nonce': public['nonce'],
+                             'zip_bytes': ZIP_BYTES, 'zip_sha256': ZIP_SHA256,
+                             'payload_manifest_sha256': MANIFEST_SHA256, 'source_head': SOURCE_HEAD,
+                             'cipher_sha256': marker['cipher_sha256'], 'chunk_count': marker['chunk_count'],
+                             'private_key_retained': False, 'note': 'Unchanged full payload/source/APK admission must follow.'}
+                  private_write(destination.with_suffix('.transport-receipt.json'), canonical(receipt))
+                  print('Authenticated decrypt and exact frozen ZIP pins passed; private extraction ready for full admission.')
+              finally:
+                  cleanup(ctx)
+                  if not extracted and destination.exists():
+                      require(not destination.is_symlink(), 'failed_input_symlink')
+                      shutil.rmtree(destination)
+
+
+          def seal(args):
+              public = validate_recipient(json.loads(Path(args.recipient_file).read_bytes()), args.expected_certificate_sha256)
+              require(file_digest(args.archive) == (ZIP_BYTES, ZIP_SHA256), 'local_archive_exact_pin')
+              require(type(args.chunk_bytes) is int and 1 <= args.chunk_bytes <= CHUNK_BYTES, 'local_chunk_bound')
+              directory = Path(args.output_dir)
+              directory.mkdir(mode=0o700)
+              try:
+                  cert, cipher = directory / 'recipient-public.pem', directory / 'ciphertext.cms'
+                  private_write(cert, public['certificate_pem'].encode('ascii'))
+                  private_write(cipher, b'')
+                  openssl(['cms', '-encrypt', '-binary', '-aes-256-gcm', '-outform', 'DER', '-in', args.archive,
+                           '-out', str(cipher), '-recip', str(cert), '-keyopt', 'rsa_padding_mode:oaep',
+                           '-keyopt', 'rsa_oaep_md:sha256', '-keyopt', 'rsa_mgf1_md:sha256'])
+                  rows, aggregate, total = [], hashlib.sha256(), 0
+                  with cipher.open('rb') as stream:
+                      for index, data in enumerate(iter(lambda: stream.read(args.chunk_bytes), b'')):
+                          total += len(data)
+                          require(index < MAX_CHUNKS and total <= MAX_CIPHER_BYTES, 'local_cipher_bound')
+                          chunk = directory / ('chunk-' + str(index).zfill(4) + '.cms.bin')
+                          private_write(chunk, data)
+                          aggregate.update(data)
+                          rows.append({'index': index, 'git_blob_sha1': hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest(),
+                                       'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
+                  fields = ('repository', 'repository_id', 'run_id', 'run_attempt', 'trigger_head', 'trigger_branch',
+                            'transport_branch', 'nonce', 'certificate_sha256', 'source_head', 'zip_bytes',
+                            'zip_sha256', 'payload_manifest_sha256', 'encryption')
+                  marker = {'schema_version': 1, 'kind': 'mojaloss_one_run_cms_input',
+                            **{k: public[k] for k in fields}, 'cipher_bytes': total, 'cipher_sha256': aggregate.hexdigest(),
+                            'chunk_count': len(rows), 'chunks': rows}
+                  validate_marker(marker, public)
+                  private_write(directory / 'input.json', canonical(marker))
+                  print('Local ciphertext and bound marker prepared; no HTTP request was made.')
+              except BaseException:
+                  shutil.rmtree(directory)
+                  raise
+
+
+          def main():
+              os.umask(0o077)
+              parser = argparse.ArgumentParser(description=__doc__)
+              sub = parser.add_subparsers(dest='mode', required=True)
+              for name in ('recipient', 'receive', 'cleanup'):
+                  sub.add_parser(name)
+              local = sub.add_parser('seal')
+              local.add_argument('--recipient-file', required=True)
+              local.add_argument('--expected-certificate-sha256', required=True,
+                                 help='DER SHA256 independently read from the trusted running job step name')
+              local.add_argument('--archive', required=True)
+              local.add_argument('--output-dir', required=True)
+              local.add_argument('--chunk-bytes', type=int, default=2 * 1024**2,
+                                 help='Local upload chunk size; positive and at most 4 MiB (default 2 MiB)')
+              args = parser.parse_args()
+              if args.mode == 'recipient':
+                  recipient()
+              elif args.mode == 'receive':
+                  receive()
+              elif args.mode == 'cleanup':
+                  cleanup(context())
+                  cleanup_input()
+              else:
+                  seal(args)
+
+
+          if __name__ == '__main__':
+              try:
+                  main()
+              except TransportFailure as failure:
+                  raise SystemExit('Encrypted CI input failed: ' + str(failure)) from None
+              except Exception as failure:
+                  # Do not expose URL, body, headers, token, private file bytes, or full
+                  # exception text. All received API/network/OpenSSL details stay private.
+                  raise SystemExit('Encrypted CI input failed: ' + type(failure).__name__) from None
+          '''
+          raw = content.encode('utf-8')
+          assert hashlib.sha256(raw).hexdigest() == '3b3b645e7c7f74521875996d287096c0cef844023f0384aeb16394cb673e907e'
+          path = Path(os.environ['RUNNER_TEMP'])/'mojaloss-mcp-helper.py'
+          with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o700), 'wb') as output:
+              output.write(raw)
+          subprocess.run(['openssl', 'version'], check=True)
+          print('Reviewed encrypted input helper SHA256: 3b3b645e7c7f74521875996d287096c0cef844023f0384aeb16394cb673e907e')
+          PY_INSTALL_HELPER
+
+      - name: Publish the public recipient for this single trusted run
+        id: recipient
+        timeout-minutes: 5
+        env:
+          MCP_TRANSPORT_TOKEN: ${{ github.token }}
+        run: python3 "$RUNNER_TEMP/mojaloss-mcp-helper.py" recipient
+
+      - name: Bind recipient SHA256 ${{ steps.recipient.outputs.certificate_sha256 }}
+        timeout-minutes: 1
+        env:
+          CERTIFICATE_SHA256: ${{ steps.recipient.outputs.certificate_sha256 }}
+        run: |
+          python3 - <<'PY_BIND'
+          import os,re
+          value=os.environ['CERTIFICATE_SHA256']
+          assert re.fullmatch('[0-9a-f]{64}',value)
+          print('Trusted running-job recipient SHA256-DER: '+value)
+          PY_BIND
+
+      - name: Receive authenticated ciphertext and safely extract the exact private ZIP
+        timeout-minutes: 65
+        env:
+          MCP_TRANSPORT_TOKEN: ${{ github.token }}
+          INPUT_ROOT: ${{ runner.temp }}/mojaloss-private-input
+        run: python3 "$RUNNER_TEMP/mojaloss-mcp-helper.py" receive
+
+      - name: Bind every private input before executing supplied code
+        env:
+          INPUT_ROOT: ${{ runner.temp }}/mojaloss-private-input
+          PAYLOAD_SHA256: 7956e4ca24c22cf68141b9406d42a284211816cfd8e12e881e27a2b8697f1e00
+          SOURCE_HEAD: 650cd200f10aace6f9a391a4079f4b92b0e26753
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path,PurePosixPath
+          import hashlib,json,os
+          root=Path(os.environ['INPUT_ROOT']).resolve(strict=True)
+          manifest=root/'payload-manifest.json'
+          assert manifest.is_file() and not manifest.is_symlink()
+          assert hashlib.sha256(manifest.read_bytes()).hexdigest()==os.environ['PAYLOAD_SHA256']
+          data=json.loads(manifest.read_text())
+          assert data['schema_version']==1 and data['kind']=='mojaloss_private_frozen_payload'
+          assert data['source_head']==os.environ['SOURCE_HEAD']
+          assert 1<=len(data['files'])<=10000
+          seen=set()
+          for row in data['files']:
+              rel=PurePosixPath(row['relative_path'])
+              assert not rel.is_absolute() and '..' not in rel.parts and '\\' not in str(rel)
+              assert str(rel) not in seen and str(rel)!='payload-manifest.json'
+              seen.add(str(rel)); path=root/str(rel)
+              assert not any(p.is_symlink() for p in (path,*path.parents)) and path.is_file()
+              assert path.resolve(strict=True).is_relative_to(root)
+              assert type(row['byte_count']) is int and path.stat().st_size==row['byte_count']
+              h=hashlib.sha256()
+              with path.open('rb') as stream:
+                  for block in iter(lambda:stream.read(1048576),b''):h.update(block)
+              assert h.hexdigest()==row['sha256']
+          assert not any(p.is_symlink() for p in root.rglob('*'))
+          assert {str(p.relative_to(root)) for p in root.rglob('*') if p.is_file()}==seen|{'payload-manifest.json'}
+          PY
+
+      - name: Validate final source and exact354 selector union
+        env:
+          INPUT_ROOT: ${{ runner.temp }}/mojaloss-private-input
+          PAYLOAD_SHA256: 7956e4ca24c22cf68141b9406d42a284211816cfd8e12e881e27a2b8697f1e00
+          SOURCE_HEAD: 650cd200f10aace6f9a391a4079f4b92b0e26753
+        run: |
+          python3 "$INPUT_ROOT/tooling/prepare_ci_payload.py" --root "$INPUT_ROOT" --manifest-sha256 "$PAYLOAD_SHA256" --source-head "$SOURCE_HEAD" --out "$RUNNER_TEMP/mojaloss-prepared"
+
+      - name: Require accessible KVM and installed runner SDK tools
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import os,stat,subprocess
+          kvm=Path('/dev/kvm')
+          assert kvm.exists() and stat.S_ISCHR(kvm.stat().st_mode), 'Runner does not expose KVM'
+          if not os.access(kvm,os.R_OK|os.W_OK):
+              # Ephemeral hosted runner: grant only this runner user access to
+              # the existing device. Never creates a missing KVM device.
+              subprocess.run(['sudo','chown',str(os.getuid()),str(kvm)],check=True)
+              subprocess.run(['sudo','chmod','u+rw',str(kvm)],check=True)
+          assert os.access(kvm,os.R_OK|os.W_OK), 'KVM permissions still unavailable'
+          sdk=Path(os.environ['ANDROID_HOME']).resolve(strict=True)
+          for rel in ['emulator/emulator','platform-tools/adb','build-tools/35.0.0/apksigner','build-tools/35.0.0/aapt2']:
+              assert (sdk/rel).is_file(), 'Runner is missing required SDK tool: '+rel
+          java=Path(os.environ['JAVA_HOME_17_X64']).resolve(strict=True)
+          assert (java/'bin/java').is_file()
+          with Path(os.environ['GITHUB_ENV']).open('a') as env:env.write('JAVA_HOME='+str(java)+'\n')
+          owned=Path(os.environ['RUNNER_TEMP'])/'mojaloss-sdk'
+          owned.mkdir(); (owned/'build-tools').mkdir()
+          for rel in ['emulator','platform-tools','build-tools/35.0.0']:
+              (owned/rel).symlink_to(sdk/rel,target_is_directory=True)
+          PY
+
+      - name: Provision only the pinned official full AOSP image
+        env:
+          INPUT_ROOT: ${{ runner.temp }}/mojaloss-private-input
+        run: |
+          python3 "$INPUT_ROOT/tooling/runtime_image_contract.py" --fetch --archive "$RUNNER_TEMP/mojaloss-inputs/x86_64-30_r11.zip" --sdk "$RUNNER_TEMP/mojaloss-sdk" --receipt "$RUNNER_TEMP/mojaloss-prepared/full-image-receipt.json"
+
+      - name: Run one fresh exact cohort, with no retries or weakened gates
+        env:
+          INPUT_ROOT: ${{ runner.temp }}/mojaloss-private-input
+        run: |
+          python3 "$INPUT_ROOT/tooling/run_ci_native.py" --manifest "$RUNNER_TEMP/mojaloss-prepared/ci-manifest.json" --sdk "$RUNNER_TEMP/mojaloss-sdk" --image-archive "$RUNNER_TEMP/mojaloss-inputs/x86_64-30_r11.zip" --image-receipt "$RUNNER_TEMP/mojaloss-prepared/full-image-receipt.json" --entry-auditor "$INPUT_ROOT/tooling/check_native_entry_coverage.py" --work "$RUNNER_TEMP/mojaloss-owned-guest" --out "$RUNNER_TEMP/mojaloss-native-evidence"
+
+      - name: Remove this run's private recipient staging and extracted inputs
+        if: always()
+        timeout-minutes: 2
+        run: |
+          python3 - <<'PY_CLEAN_INPUT'
+          from pathlib import Path
+          import os,shutil,subprocess,sys
+          parent=Path(os.environ['RUNNER_TEMP']).resolve(strict=True)
+          try:
+              helper=parent/'mojaloss-mcp-helper.py'
+              if helper.is_file():
+                  subprocess.run([sys.executable,str(helper),'cleanup'],check=True,timeout=60)
+          finally:
+              target=parent/'mojaloss-private-input'
+              if target.exists() or target.is_symlink():
+                  assert target.parent==parent and not target.is_symlink() and target.is_dir()
+                  shutil.rmtree(target)
+          PY_CLEAN_INPUT
+
+      - name: Retain actual evidence, including failures; exclude private APKs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # verified v7.0.2, Node24
+        with:
+          name: full-runtime-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/mojaloss-native-evidence/**
+            ${{ runner.temp }}/mojaloss-prepared/**
+            ${{ runner.temp }}/mojaloss-private-input.transport-receipt.json
+            !${{ runner.temp }}/**/*.apk
+            !${{ runner.temp }}/**/*.zip
+            !${{ runner.temp }}/mojaloss-private-input/**
+            !${{ runner.temp }}/mojaloss-mcp-transport-run-*/**
+            !${{ runner.temp }}/**/*.pem
+            !${{ runner.temp }}/**/*.key
+            !${{ runner.temp }}/**/*.jks
+            !${{ runner.temp }}/**/*.keystore
+            !${{ runner.temp }}/**/*.p12
+            !${{ runner.temp }}/**/*.pfx
+
+# A passing run is fixture evidence only. This workflow never publishes a release.
