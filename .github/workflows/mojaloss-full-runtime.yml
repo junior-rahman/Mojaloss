@@ -1,0 +1,287 @@
+name: Exact frozen cohort from private draft on full Android and KVM
+
+on:
+  workflow_dispatch:
+    inputs:
+      draft_release_id:
+        description: Numeric ID of the same-repository unpublished draft release
+        required: true
+        type: string
+      draft_asset_id:
+        description: Numeric ID of the private payload ZIP asset in that draft
+        required: true
+        type: string
+      payload_manifest_sha256:
+        description: Exact SHA256 of the privately supplied payload-manifest.json
+        required: true
+        type: string
+      final_source_head:
+        description: Exact source identity of all four supplied frozen APKs
+        required: true
+        type: string
+
+permissions:
+  contents: write # Required to read unpublished drafts; proposal code uses release GET only
+  actions: read
+
+concurrency:
+  group: mojaloss-full-runtime
+  cancel-in-progress: false
+
+jobs:
+  native:
+    if: github.repository == 'junior-rahman/Mojaloss' && github.repository_id == '1421546274'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      # Input is an unpublished same-repository draft asset, not a public release.
+      - name: Fetch one private draft input with the same-repository token
+        env:
+          DRAFT_INPUT_TOKEN: ${{ github.token }}
+          DRAFT_RELEASE_ID: ${{ inputs.draft_release_id }}
+          DRAFT_ASSET_ID: ${{ inputs.draft_asset_id }}
+          INPUT_ROOT: ${{ runner.temp }}/mojaloss-private-input
+        run: |
+          python3 - <<'PY_DRAFT'
+          #!/usr/bin/env python3
+          """CI proposal: GET one private draft asset; never creates or publishes anything.
+          
+          Only a workflow token is accepted through environment. It is sent to the fixed
+          GitHub API host only, never forwarded to signed storage redirects or printed.
+          No request is performed merely by importing this file.
+          """
+          import hashlib
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+          import re
+          import stat
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from zipfile import ZipFile
+          
+          REPOSITORY = 'junior-rahman/Mojaloss'
+          API = 'https://api.github.com/repos/'+REPOSITORY
+          MAX_ARCHIVE_BYTES = 200 * 1024**2
+          MAX_UNPACKED_BYTES = 250 * 1024**2
+          
+          
+          def require(value, message):
+              if not value:
+                  raise RuntimeError(message)
+          
+          
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, request, response, code, message, headers, url):
+                  return None
+          
+          
+          def allowed_storage_redirect(url):
+              parsed = urllib.parse.urlsplit(url)
+              host = (parsed.hostname or '').lower()
+              return (parsed.scheme == 'https' and not parsed.username and not parsed.password
+                      and parsed.port in (None, 443)
+                      and (host.endswith('.githubusercontent.com') or host.endswith('.amazonaws.com')
+                           or host.endswith('.blob.core.windows.net')))
+          
+          
+          def response(url, token=None, accept='application/vnd.github+json'):
+              headers = {'Accept': accept, 'X-GitHub-Api-Version': '2026-03-10', 'User-Agent': 'MojaLoss-native-input'}
+              if token:
+                  require(urllib.parse.urlsplit(url).hostname == 'api.github.com', 'Token is restricted to GitHub API')
+                  headers['Authorization'] = 'Bearer '+token
+              request = urllib.request.Request(url, headers=headers, method='GET')
+              return urllib.request.build_opener(NoRedirect).open(request, timeout=120)
+          
+          
+          def api_json(path, token):
+              with response(API+path, token) as result:
+                  data = result.read(1024 * 1024 + 1)
+              require(len(data) <= 1024 * 1024, 'Release metadata exceeds bound')
+              return json.loads(data)
+          
+          
+          def extract_payload(archive, destination):
+              destination = Path(destination)
+              require(not destination.exists(), 'Never overwrite private payload inputs')
+              with ZipFile(archive) as z:
+                  infos = z.infolist()
+                  require(1 <= len(infos) <= 10000, 'Payload member count exceeds bound')
+                  names, total = set(), 0
+                  for item in infos:
+                      p = PurePosixPath(item.filename)
+                      require(not p.is_absolute() and '..' not in p.parts and '\\' not in item.filename
+                              and 1 <= len(item.filename) <= 512, 'Unsafe private payload path')
+                      require(item.filename not in names and not stat.S_ISLNK(item.external_attr >> 16)
+                              and not item.flag_bits & 1, 'Duplicate/symlink/encrypted payload member')
+                      require(p.suffix.lower() not in ('.jks', '.keystore', '.p12', '.pfx'),
+                              'Runtime input must contain presigned APKs, never a signing key')
+                      names.add(item.filename); total += item.file_size
+                      require(total <= MAX_UNPACKED_BYTES, 'Private payload exceeds unpacked bound')
+                  require('payload-manifest.json' in names, 'Payload manifest must be at archive root')
+                  destination.mkdir(parents=True)
+                  for item in infos:
+                      target = destination/item.filename
+                      if item.is_dir():
+                          target.mkdir(parents=True, exist_ok=True)
+                          continue
+                      target.parent.mkdir(parents=True, exist_ok=True)
+                      with z.open(item) as source, target.open('xb') as output:
+                          for block in iter(lambda: source.read(1024*1024), b''):
+                              output.write(block)
+          
+          
+          def main():
+              token = os.environ['DRAFT_INPUT_TOKEN']
+              release_id, asset_id = os.environ['DRAFT_RELEASE_ID'], os.environ['DRAFT_ASSET_ID']
+              require(token and re.fullmatch('[1-9][0-9]*', release_id) and re.fullmatch('[1-9][0-9]*', asset_id),
+                      'Workflow token and numeric release/asset IDs are required')
+              destination = Path(os.environ['INPUT_ROOT'])
+              release = api_json('/releases/'+release_id, token)
+              require(release.get('id') == int(release_id) and release.get('draft') is True,
+                      'Input release must be the selected private draft')
+              assets = [a for a in release.get('assets', []) if a.get('id') == int(asset_id)]
+              require(len(assets) == 1, 'Selected asset is not uniquely listed in the selected draft')
+              asset = assets[0]
+              require(asset.get('state') == 'uploaded' and type(asset.get('size')) is int and 1 <= asset['size'] <= MAX_ARCHIVE_BYTES
+                      and str(asset.get('name', '')).endswith('.zip'), 'Draft input must be one bounded ZIP asset')
+              archive = destination.with_suffix('.download.zip')
+              require(not archive.exists(), 'Never overwrite a downloaded input')
+              url = API+'/releases/assets/'+asset_id
+              result = None
+              for attempt in range(4):
+                  try:
+                      result = response(url, token if attempt == 0 else None, 'application/octet-stream')
+                      break
+                  except urllib.error.HTTPError as error:
+                      if error.code not in (301, 302, 303, 307, 308):
+                          raise RuntimeError('Draft download failed with HTTP status '+str(error.code)) from None
+                      location = error.headers.get('Location', '')
+                      error.close()
+                      require(allowed_storage_redirect(location), 'Unexpected draft storage redirect')
+                      url = location
+              require(result is not None, 'Draft download exceeded redirect bound')
+              h, count = hashlib.sha256(), 0
+              archive.parent.mkdir(parents=True, exist_ok=True)
+              with result, archive.open('xb') as output:
+                  for block in iter(lambda: result.read(1024*1024), b''):
+                      count += len(block)
+                      require(count <= asset['size'], 'Draft download exceeds metadata size')
+                      output.write(block); h.update(block)
+              require(count == asset['size'], 'Draft download size differs from metadata')
+              published_digest = asset.get('digest')
+              if published_digest is not None:
+                  require(published_digest == 'sha256:'+h.hexdigest(), 'Draft asset digest differs')
+              extract_payload(archive, destination)
+              proof = {'schema_version': 1, 'status': 'DOWNLOADED_NOT_YET_ADMITTED',
+                       'repository': REPOSITORY, 'release_id': int(release_id), 'draft': True,
+                       'asset_id': int(asset_id), 'asset_name': asset['name'], 'byte_count': count,
+                       'sha256': h.hexdigest(), 'published': False, 'http_methods_used': ['GET'],
+                       'note': 'Payload manifest/source/APK admission and actual tests must still pass. No token or signed redirect URL is retained.'}
+              destination.with_suffix('.download-receipt.json').write_text(json.dumps(proof, indent=2)+'\n')
+          
+          
+          if __name__ == '__main__':
+              try:
+                  main()
+              except Exception as failure:
+                  # Network exception messages can contain signed storage URLs. Do not log
+                  # their text, response bodies or request headers.
+                  raise SystemExit('Private draft input failed: '+type(failure).__name__) from None
+          PY_DRAFT
+
+      - name: Bind every private input before executing supplied code
+        env:
+          INPUT_ROOT: ${{ runner.temp }}/mojaloss-private-input
+          PAYLOAD_SHA256: ${{ inputs.payload_manifest_sha256 }}
+          SOURCE_HEAD: ${{ inputs.final_source_head }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path,PurePosixPath
+          import hashlib,json,os
+          root=Path(os.environ['INPUT_ROOT']).resolve(strict=True)
+          manifest=root/'payload-manifest.json'
+          assert manifest.is_file() and not manifest.is_symlink()
+          assert hashlib.sha256(manifest.read_bytes()).hexdigest()==os.environ['PAYLOAD_SHA256']
+          data=json.loads(manifest.read_text())
+          assert data['schema_version']==1 and data['kind']=='mojaloss_private_frozen_payload'
+          assert data['source_head']==os.environ['SOURCE_HEAD']
+          assert 1<=len(data['files'])<=10000
+          seen=set()
+          for row in data['files']:
+              rel=PurePosixPath(row['relative_path'])
+              assert not rel.is_absolute() and '..' not in rel.parts and '\\' not in str(rel)
+              assert str(rel) not in seen and str(rel)!='payload-manifest.json'
+              seen.add(str(rel)); path=root/str(rel)
+              assert not any(p.is_symlink() for p in (path,*path.parents)) and path.is_file()
+              assert path.resolve(strict=True).is_relative_to(root)
+              assert type(row['byte_count']) is int and path.stat().st_size==row['byte_count']
+              h=hashlib.sha256()
+              with path.open('rb') as stream:
+                  for block in iter(lambda:stream.read(1048576),b''):h.update(block)
+              assert h.hexdigest()==row['sha256']
+          assert not any(p.is_symlink() for p in root.rglob('*'))
+          assert {str(p.relative_to(root)) for p in root.rglob('*') if p.is_file()}==seen|{'payload-manifest.json'}
+          PY
+
+      - name: Validate final source and exact354 selector union
+        env:
+          INPUT_ROOT: ${{ runner.temp }}/mojaloss-private-input
+          PAYLOAD_SHA256: ${{ inputs.payload_manifest_sha256 }}
+          SOURCE_HEAD: ${{ inputs.final_source_head }}
+        run: |
+          python3 "$INPUT_ROOT/tooling/prepare_ci_payload.py" --root "$INPUT_ROOT" --manifest-sha256 "$PAYLOAD_SHA256" --source-head "$SOURCE_HEAD" --out "$RUNNER_TEMP/mojaloss-prepared"
+
+      - name: Require accessible KVM and installed runner SDK tools
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import os,stat,subprocess
+          kvm=Path('/dev/kvm')
+          assert kvm.exists() and stat.S_ISCHR(kvm.stat().st_mode), 'Runner does not expose KVM'
+          if not os.access(kvm,os.R_OK|os.W_OK):
+              # Ephemeral hosted runner: grant only this runner user access to
+              # the existing device. Never creates a missing KVM device.
+              subprocess.run(['sudo','chown',str(os.getuid()),str(kvm)],check=True)
+              subprocess.run(['sudo','chmod','u+rw',str(kvm)],check=True)
+          assert os.access(kvm,os.R_OK|os.W_OK), 'KVM permissions still unavailable'
+          sdk=Path(os.environ['ANDROID_HOME']).resolve(strict=True)
+          for rel in ['emulator/emulator','platform-tools/adb','build-tools/35.0.0/apksigner','build-tools/35.0.0/aapt2']:
+              assert (sdk/rel).is_file(), 'Runner is missing required SDK tool: '+rel
+          java=Path(os.environ['JAVA_HOME_17_X64']).resolve(strict=True)
+          assert (java/'bin/java').is_file()
+          with Path(os.environ['GITHUB_ENV']).open('a') as env:env.write('JAVA_HOME='+str(java)+'\n')
+          owned=Path(os.environ['RUNNER_TEMP'])/'mojaloss-sdk'
+          owned.mkdir(); (owned/'build-tools').mkdir()
+          for rel in ['emulator','platform-tools','build-tools/35.0.0']:
+              (owned/rel).symlink_to(sdk/rel,target_is_directory=True)
+          PY
+
+      - name: Provision only the pinned official full AOSP image
+        env:
+          INPUT_ROOT: ${{ runner.temp }}/mojaloss-private-input
+        run: |
+          python3 "$INPUT_ROOT/tooling/runtime_image_contract.py" --fetch --archive "$RUNNER_TEMP/mojaloss-inputs/x86_64-30_r11.zip" --sdk "$RUNNER_TEMP/mojaloss-sdk" --receipt "$RUNNER_TEMP/mojaloss-prepared/full-image-receipt.json"
+
+      - name: Run one fresh exact cohort, with no retries or weakened gates
+        env:
+          INPUT_ROOT: ${{ runner.temp }}/mojaloss-private-input
+        run: |
+          python3 "$INPUT_ROOT/tooling/run_ci_native.py" --manifest "$RUNNER_TEMP/mojaloss-prepared/ci-manifest.json" --sdk "$RUNNER_TEMP/mojaloss-sdk" --image-archive "$RUNNER_TEMP/mojaloss-inputs/x86_64-30_r11.zip" --image-receipt "$RUNNER_TEMP/mojaloss-prepared/full-image-receipt.json" --entry-auditor "$INPUT_ROOT/tooling/check_native_entry_coverage.py" --work "$RUNNER_TEMP/mojaloss-owned-guest" --out "$RUNNER_TEMP/mojaloss-native-evidence"
+
+      - name: Retain actual evidence, including failures; exclude private APKs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # verified v7.0.2, Node24
+        with:
+          name: full-runtime-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/mojaloss-native-evidence/**
+            ${{ runner.temp }}/mojaloss-prepared/**
+            !${{ runner.temp }}/**/*.apk
+            !${{ runner.temp }}/**/*.zip
+            !${{ runner.temp }}/mojaloss-private-input/**
+
+# A passing run is fixture evidence only. This workflow never publishes a release.
