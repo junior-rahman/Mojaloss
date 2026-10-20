@@ -70,7 +70,7 @@ jobs:
           MAX_CIPHER_BYTES = 110 * 1024**2
           MAX_UNPACKED_BYTES = 250 * 1024**2
           MAX_METADATA_BYTES = 1024**2
-          WAIT_SECONDS = 3600
+          WAIT_SECONDS = 300
           POLL_SECONDS = 10
 
 
@@ -523,12 +523,12 @@ jobs:
                   raise SystemExit('Encrypted CI input failed: ' + type(failure).__name__) from None
           '''
           raw = content.encode('utf-8')
-          assert hashlib.sha256(raw).hexdigest() == '3b3b645e7c7f74521875996d287096c0cef844023f0384aeb16394cb673e907e'
+          assert hashlib.sha256(raw).hexdigest() == '2ffbc71e9fbe73e1b1b0d73e6c5ca7117d331b97718470fa8b3f56388b85faa4'
           path = Path(os.environ['RUNNER_TEMP'])/'mojaloss-mcp-helper.py'
           with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o700), 'wb') as output:
               output.write(raw)
           subprocess.run(['openssl', 'version'], check=True)
-          print('Reviewed encrypted input helper SHA256: 3b3b645e7c7f74521875996d287096c0cef844023f0384aeb16394cb673e907e')
+          print('Reviewed encrypted input helper SHA256: 2ffbc71e9fbe73e1b1b0d73e6c5ca7117d331b97718470fa8b3f56388b85faa4')
           PY_INSTALL_HELPER
 
       - name: Publish the public recipient for this single trusted run
@@ -551,7 +551,7 @@ jobs:
           PY_BIND
 
       - name: Receive authenticated ciphertext and safely extract the exact private ZIP
-        timeout-minutes: 65
+        timeout-minutes: 6
         env:
           MCP_TRANSPORT_TOKEN: ${{ github.token }}
           INPUT_ROOT: ${{ runner.temp }}/mojaloss-private-input
@@ -679,4 +679,5 @@ jobs:
 
 # A passing run is fixture evidence only. This workflow never publishes a release.
 
-# Recovery 2026-10-20: controller and exact input archive prepared before launch.
+
+# Deadline recovery 2026-10-20T16:04Z: prepared controller, five-minute transfer maximum.
