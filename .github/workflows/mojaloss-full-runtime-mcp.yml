@@ -678,3 +678,5 @@ jobs:
             !${{ runner.temp }}/**/*.pfx
 
 # A passing run is fixture evidence only. This workflow never publishes a release.
+
+# Recovery 2026-10-20: controller and exact input archive prepared before launch.
