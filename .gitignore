@@ -1,0 +1,6 @@
+build/
+*.wgt
+test/node_modules/
+test/mock.log
+*.p12
+*.pwd
