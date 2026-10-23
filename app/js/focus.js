@@ -1,7 +1,7 @@
 /* Spatial D-pad navigation: picks nearest .focusable in the pressed direction. */
 var Focus = (function () {
   var cur = null;
-  function all() { return Array.prototype.slice.call(document.querySelectorAll('.focusable')).filter(function (e) { return e.offsetParent !== null || e.closest('#player'); }); }
+  function all() { var scope = document.getElementById('player') || document; /* the player is modal */ return Array.prototype.slice.call(scope.querySelectorAll('.focusable')).filter(function (e) { return e.offsetParent !== null || e.closest('#player'); }); }
   function rect(e) { return e.getBoundingClientRect(); }
   function set(e) {
     if (!e) return; if (cur) cur.classList.remove('focused');
@@ -9,7 +9,7 @@ var Focus = (function () {
     var track = e.closest('.track');
     if (track) { var vis = track.parentNode.clientWidth; var off = Math.max(0, e.offsetLeft + e.offsetWidth + 160 - vis); if (e === track.children[0]) off = 0; track.style.transform = 'translateX(' + (-off) + 'px)'; }
     var inner = e.closest('.rows-inner');
-    if (inner) { var row = e.closest('.row') || e; inner.style.transform = 'translateY(' + (-Math.max(0, row.offsetTop - 10)) + 'px)'; }
+    if (inner) { var row = e.closest('.row') || e; var y = row.getBoundingClientRect().top - inner.getBoundingClientRect().top; inner.style.transform = 'translateY(' + (-Math.max(0, y - 10)) + 'px)'; }
     if (Focus.onFocus) Focus.onFocus(e);
   }
   function move(dir) {

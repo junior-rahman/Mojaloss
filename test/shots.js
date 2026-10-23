@@ -1,64 +1,158 @@
-// Drives the app against the mock server with real D-pad key events; saves 1920x1080 screenshots.
-const puppeteer = require('puppeteer-core');
-const OUT = '/workspace/mojaloss-work/design/';
-const BASE = 'http://localhost:8787/index.html?mock=http://localhost:8787';
+// Fresh end-to-end run against the mock server (never mojaloss.stream). Real key events; 1920x1080 screenshots.
+const puppeteer = require('puppeteer-core'), fs = require('fs');
+const OUT = '/workspace/mojaloss-work/design/', M = 'http://localhost:8787';
+const BASE = M + '/index.html?mock=' + M;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+let pass = 0, fail = 0;
+const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); c ? pass++ : fail++; };
+const api = async q => (await fetch(M + q)).json();
 (async () => {
   const b = await puppeteer.launch({ executablePath: '/usr/bin/google-chrome', headless: 'new', args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required'] });
   const pg = await b.newPage(); await pg.setViewport({ width: 1920, height: 1080 });
+  // Fake Tizen runtime so key registration and exit can be observed.
+  await pg.evaluateOnNewDocument(() => { window.__reg = []; window.tizen = { tvinputdevice: { registerKey: k => window.__reg.push(k) }, application: { getCurrentApplication: () => ({ exit: () => { window.__exited = true; } }) } }; });
   const errs = []; pg.on('pageerror', e => errs.push(e.message));
   const key = async (code, n = 1) => { for (let i = 0; i < n; i++) { await pg.evaluate(c => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: c, bubbles: true })), code); await sleep(250); } };
-  const focused = () => pg.evaluate(() => { const e = document.querySelector('.focused'); return e ? e.textContent.trim().slice(0, 40) : null; });
-  const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) process.exitCode = 1; };
-  await pg.goto(BASE); await pg.evaluate(() => localStorage.clear()); await pg.goto(BASE);
-  await sleep(800);
-  const code = await pg.$eval('#code', e => e.textContent); ok(code === '482915', 'sign-in shows Quick Connect code ' + code);
+  const focused = () => pg.evaluate(() => { const e = document.querySelector('.focused'); return e ? (e.getAttribute('data-slug') || e.textContent.trim().slice(0, 40)) : null; });
+  const scr = () => pg.evaluate(() => MLTV.screen());
+  const BACK = 10009, OK = 13, L = 37, U = 38, R = 39, D = 40;
+
+  // static checks
+  const cfg = fs.readFileSync(__dirname + '/../app/config.xml', 'utf8');
+  ok(['http://tizen.org/privilege/internet', 'http://tizen.org/privilege/tv.inputdevice'].every(p => cfg.includes(p)), 'config.xml: internet + tv.inputdevice privileges');
+  ok(/access origin="https:\/\/mojaloss.stream" subdomains="true"/.test(cfg) && /access origin="https:\/\/www.mojaloss.stream"/.test(cfg), 'config.xml: cross-origin access for mojaloss.stream + www');
+  if (fs.existsSync(__dirname + '/../build/css/app.css')) ok(!fs.readFileSync(__dirname + '/../build/css/app.css', 'utf8').includes('var('), 'built CSS has no custom properties (Tizen 3 safe)');
+
+  // 1. Quick Connect sign-in
+  await pg.goto(BASE); await pg.evaluate(() => localStorage.clear()); await pg.goto(BASE); await sleep(800);
+  ok(JSON.stringify(await pg.evaluate(() => window.__reg)) === JSON.stringify(['MediaPlay', 'MediaPause', 'MediaPlayPause', 'MediaFastForward', 'MediaRewind', 'MediaStop', 'ColorF0Red', 'ColorF1Green']), 'tvinputdevice.registerKey for media keys');
+  ok(await pg.$eval('#code', e => e.textContent) === '482915', 'sign-in shows Quick Connect code');
   await pg.screenshot({ path: OUT + 'tv-signin.png' });
-  await sleep(11000); // two polls at 5s → approved → AuthenticateWithQuickConnect
-  ok(await pg.evaluate(() => localStorage.getItem('mltest.token') === 'mock-token'), 'token persisted after approval');
+  await sleep(12000);
+  ok(await pg.evaluate(() => localStorage.getItem('mltest.token') === 'mock-token'), 'token persisted after phone approval');
   const dev1 = await pg.evaluate(() => localStorage.getItem('mltest.deviceId'));
   await sleep(1500);
-  ok(await pg.$('.chip') !== null, 'platform chips rendered');
-  const chips = await pg.$$eval('.chip', es => es.map(e => e.firstChild.textContent));
-  ok(!chips.includes('Hoichoi') && !chips.includes('Voot') && !chips.includes('Action'), 'empty / non-platform categories hidden: ' + chips.join(', '));
-  await key(39); await sleep(500);
+
+  // 2. Home
+  ok(await scr() === 'home', 'lands on Home after approval');
+  const rows = await pg.$$eval('section.row', s => s.filter(x => x.style.display !== 'none').map(x => x.id));
+  ok(['cw', 'plat', 'lm', 'ls', 'fav'].every(r => rows.includes(r)), 'Home rows: Continue Watching, platforms, Latest Movies, Latest Series, My List (' + rows + ')');
+  ok(await pg.$eval('#plat', e => !e.querySelector('h2')), 'platform row has no heading');
+  ok(!(await pg.$('nav, .nav, .bottom-nav, .tabbar')), 'no navigation bar/buttons');
+  const chips = await pg.$$eval('.chip', es => es.map(e => e.getAttribute('data-slug') + (e.querySelector('svg path') ? ':logo' : ':mono')));
+  ok(JSON.stringify(chips) === JSON.stringify(['netflix:logo', 'prime:logo', 'apple:logo', 'hbo:logo']), 'platforms from server categories, logos, empty/non-platform hidden: ' + chips);
+  await key(R); await sleep(400);
   await pg.screenshot({ path: OUT + 'tv-home.png' });
-  await key(40); const chipName = await pg.evaluate(() => { const e = document.querySelector('.focused'); return e && e.classList.contains('chip') ? e.firstChild.textContent : null; });
-  ok(!!chipName, 'D-pad down → platform row: ' + chipName);
-  await key(13); await sleep(500);
-  ok(await pg.$eval('h1', e => e.textContent) === chipName, 'platform screen opens: ' + chipName);
-  ok(await pg.$eval('.pill.on[data-f="latest"]', e => !!e), 'default sort is Latest release');
-  await key(38); await key(39); await key(13); await sleep(300); // focus a filter pill → Movies
+
+  // 3. Platform screen
+  await key(D); const slug = await focused(); ok(['netflix','prime','apple','hbo'].includes(slug), 'D-pad down reaches platform row: ' + slug);
+  await key(L, 3); ok(await focused() === 'netflix', 'D-pad left along row'); await key(OK); await sleep(500);
+  ok(await scr() === 'platform' && !(await pg.$('h1')) && !!(await pg.$('.plogo svg path')), 'platform screen shows logo instead of a title');
+  ok(await pg.$eval('.pill.on[data-f="latest"]', e => e.textContent) === 'Newest release', 'default sort: Newest release');
+  const yrs = await pg.$$eval('.card', cs => cs.length); ok(yrs === 6, 'Netflix shows 6 matched titles');
+  const order = await pg.evaluate(() => Array.from(document.querySelectorAll('.card .t')).map(t => t.textContent));
+  ok(order[0] === 'Kite Season' || order[0] === 'Copper Sky' || order[0] === 'Midnight Harbor' || order[0] === 'Northline', 'newest first: ' + order.join(', '));
+  await key(U); await key(L, 5); await key(R); await key(OK); await sleep(300);
+  const types = await pg.evaluate(() => Array.from(document.querySelectorAll('.card .t')).map(t => t.textContent));
+  ok(types.length === 4 && !types.includes('Northline') && !types.includes('The Long Field'), 'Movies filter: ' + types);
   await pg.screenshot({ path: OUT + 'tv-platform.png' });
-  await key(10009); await sleep(400); // back to home
-  await sleep(800);
-  ok((await focused() || '').length > 0, 'back restores home, focus: ' + await focused());
-  await key(13); await sleep(800);
+  await key(BACK); await sleep(800); ok(await scr() === 'home', 'Back: platform → Home');
+
+  // 4. Detail: resume + favourite
+  ok(await focused() === 'Midnight Harbor', 'Home focus starts on Continue Watching');
+  await key(OK); await sleep(900);
+  ok((await focused() || '').startsWith('Resume from 40:00'), 'detail offers Resume from saved position: ' + await focused());
+  ok(!!(await pg.$('#restart')), 'From the start option');
+  await key(R, 2); await key(OK); await sleep(600);
+  ok(await pg.$eval('#fav', e => e.textContent) === '\u2713 In My List', 'My List toggle');
   await pg.screenshot({ path: OUT + 'tv-detail.png' });
-  ok((await focused() || '').startsWith('Resume') || (await focused() || '').startsWith('Play'), 'detail primary action focused: ' + await focused());
-  await key(10009); await sleep(400);
-  await key(38); await sleep(100); await key(38); await key(39); await sleep(200); await key(13); await sleep(500);
-  if (!(await pg.$('.keys'))) { await pg.evaluate(() => MLTV.go('search')); await sleep(400); }
-  for (const [c, n] of [[39, 2], [39, 0]]) {} // focus starts at A
-  // type "co" with D-pad: C is 2 right of A; O is (row 2, col 2)
-  await key(39, 2); await key(13); await key(40); await key(37); await key(13); await sleep(1200);
-  ok(await pg.$eval('#sb', e => e.textContent) === 'co', 'on-screen keyboard typed: ' + await pg.$eval('#sb', e => e.textContent));
-  ok((await pg.$$('#res .card')).length >= 1, 'search results: ' + (await pg.$$eval('#res .card .t', es => es.map(e => e.textContent))).join(', '));
-  await pg.screenshot({ path: OUT + 'tv-search.png' });
-  await pg.evaluate(() => MLTV.play({ Id: 'it0', Name: 'Midnight Harbor', RunTimeTicks: 99 * 60e7 }, 0)); await sleep(1200);
-  ok(await pg.$('#player video') !== null, 'player opened with HLS url ' + await pg.$eval('#player video', v => v.getAttribute('src')));
-  await pg.evaluate(() => { document.getElementById('pb').style.width = '37%'; document.getElementById('pt').textContent = '36:12'; });
+  await key(BACK); await sleep(600); ok(await scr() === 'home', 'Back: detail → Home');
+
+  // series detail with episodes + play next episode
+  await pg.evaluate(() => MLTV.go('detail', { item: { Id: 'it3', Name: 'Northline', Type: 'Series' } })); await sleep(1200);
+  ok(await pg.$$eval('#eps .card', c => c.length) === 4, 'series detail lists episodes');
+  ok(await focused() === 'Play next episode', 'series primary action is Play next episode');
+  await pg.screenshot({ path: OUT + 'tv-detail-series.png' });
+  await api('/__state?direct=1');
+  await key(OK); await sleep(2500);
+  let pl = await pg.evaluate(() => { const p = MLTV.player(); return p && { id: p.it.Id, t: p.v.currentTime }; });
+  ok(pl && pl.id === 'ep3', 'Play next episode → NextUp episode S1E3 (' + (pl && pl.id) + ')');
+  ok(pl && pl.t >= 20, 'resumes at saved position 0:20 t=' + (pl && pl.t.toFixed(1)));
+  await key(BACK); await sleep(400);
+
+  // 5. Player: direct play, progress, keys, tracks, retry
+  await pg.evaluate(() => MLTV.play({ Id: 'it0', Name: 'Midnight Harbor', Type: 'Movie', RunTimeTicks: 99 * 60e7 }, 3 * 1e7)); await sleep(2500);
+  let st = await pg.evaluate(() => { const v = MLTV.player().v; return { src: v.currentSrc, t: v.currentTime, paused: v.paused }; });
+  ok(/\/Videos\/it0\/stream\?static=true/.test(st.src) && !st.paused, 'direct play stream plays');
+  ok(st.t >= 3, 'starts at requested resume position t=' + st.t.toFixed(1));
+  await key(OK); ok(await pg.evaluate(() => MLTV.player().v.paused), 'OK pauses'); await key(10252); ok(!(await pg.evaluate(() => MLTV.player().v.paused)), 'Play/Pause key resumes');
+  const t0 = await pg.evaluate(() => MLTV.player().v.currentTime); await key(L); const t1 = await pg.evaluate(() => MLTV.player().v.currentTime);
+  ok(t1 < t0 - 1, 'Left seeks back ' + t0.toFixed(1) + '→' + t1.toFixed(1));
+  await sleep(10500);
+  let reps = (await api('/__state')).reports;
+  ok(reps.some(r => r.kind === 'Playing' && r.ItemId === 'it0') && reps.some(r => r.kind === 'Progress' && r.ItemId === 'it0' && r.PositionTicks > 0), 'reports Playing + Progress with position');
+  await key(U); await sleep(300);
+  ok(await pg.$$eval('#menu .opt', o => o.length) === 4, 'Up opens audio/subtitle menu (2 audio, Off, 1 subtitle)');
   await pg.screenshot({ path: OUT + 'tv-player.png' });
-  await key(10009); ok(await pg.$('#player') === null, 'Back closes player');
-  // relaunch: must NOT sign in again
+  await key(D); await key(OK); await sleep(2500); // Hindi
+  const log1 = await api('/__log');
+  ok(log1.some(l => /PlaybackInfo/.test(l)) && (await pg.evaluate(() => MLTV.player().base().AudioStreamIndex)) === 2, 'audio track switch requests stream with AudioStreamIndex=2');
+  await key(U); await key(D, 3); await key(OK); await sleep(2000);
+  ok(await pg.evaluate(() => { const t = document.querySelector('#player track'); return t && /Subtitles\/3\/0\/Stream\.vtt/.test(t.src); }), 'subtitle track attached (VTT)');
+  ok(await pg.evaluate(() => MLTV.player().base().SubtitleStreamIndex) === 3, 'progress reports SubtitleStreamIndex=3');
+  await pg.evaluate(() => MLTV.player().v.dispatchEvent(new Event('error'))); await sleep(300);
+  ok(/retrying in 2s/.test(await pg.$eval('#buf', e => e.textContent)), 'network error → retry with backoff message');
+  await sleep(3500);
+  ok(await pg.evaluate(() => !MLTV.player().v.paused && document.getElementById('buf').style.display === 'none'), 'playback recovers after retry');
+  await key(U); await key(BACK); ok(!!(await pg.evaluate(() => MLTV.player())), 'Back closes track menu first');
+  await key(BACK); ok(!(await pg.evaluate(() => MLTV.player())), 'Back closes player');
+  await sleep(300); reps = (await api('/__state')).reports; ok(reps.some(r => r.kind === 'Stopped'), 'reports Stopped');
+  // auto next episode at end
+  await pg.evaluate(() => MLTV.play({ Id: 'ep2', Name: 'Signal', Type: 'Episode', SeriesId: 'it3', SeriesName: 'Northline' }, 57 * 1e7)); await sleep(6000);
+  ok(await pg.evaluate(() => MLTV.player() && MLTV.player().it.Id) === 'ep3', 'episode end → plays next episode');
+  await key(BACK); await api('/__state?direct=0');
+  await pg.evaluate(() => MLTV.play({ Id: 'it1', Name: 'x' }, 0)); await sleep(800);
+  ok(/master\.m3u8/.test(await pg.evaluate(() => MLTV.player().v.getAttribute('src'))), 'transcode → HLS url');
+  await key(BACK);
+
+  // 6. Search
+  await pg.evaluate(() => { MLTV.go('home', {}, true); MLTV.go('search'); }); await sleep(800);
+  await key(R, 2); await key(OK); await key(D); await key(L); await key(OK); await sleep(1300);
+  ok(await pg.$eval('#sb', e => e.textContent) === 'co', 'remote keyboard typing');
+  ok((await pg.$$('#res .card')).length === 2, 'search results');
+  await pg.screenshot({ path: OUT + 'tv-search.png' });
+  await key(U); await key(L, 2); await key(D); await key(D); await key(D); await key(R); await key(OK); await sleep(1300); // Delete? fall back to direct
+  await pg.evaluate(() => { const k = document.querySelector('.key[data-k="z"]'); k.onclick(); k.onclick(); }); await sleep(1300);
+  ok(/No matches/.test(await pg.$eval('#res', e => e.textContent)), 'empty result message');
+  await key(BACK); await sleep(600); ok(await scr() === 'home', 'Back: search → Home');
+
+  // 7. Offline state + retry
+  await pg.setOfflineMode(true); await pg.evaluate(() => MLTV.go('home', {}, true)); await sleep(1500);
+  ok(/You are offline/.test(await pg.$eval('#root', e => e.textContent)) && await focused() === 'Try again', 'offline → error state with Try again focused');
+  await pg.screenshot({ path: OUT + 'tv-offline.png' });
+  await pg.setOfflineMode(false); await key(OK); await sleep(1500);
+  ok(!!(await pg.$('#cw')), 'Try again reloads Home once online');
+
+  // 8. Relaunch keeps session; revoked token → re-approval, no silent re-login
   await pg.goto(BASE); await sleep(1500);
-  ok(await pg.$('.signin') === null, 'relaunch stays signed in (no new sign-in)');
+  ok(await scr() === 'home', 'relaunch stays signed in');
   ok(dev1 === await pg.evaluate(() => localStorage.getItem('mltest.deviceId')), 'device id stable');
-  const log = await (await fetch('http://localhost:8787/__log')).json();
-  const auths = log.filter(l => l.includes('AuthenticateWithQuickConnect')).length;
-  ok(auths === 1, 'exactly one authenticate call across session + relaunch (' + auths + ')');
-  ok(log.some(l => /AUTH:MediaBrowser Client="MojaLoss TV", Device="[^"]+", DeviceId="mltv-[0-9a-f]{24}", Version="0.1.0", Token="\*\*\*"/.test(l)), 'Authorization header format');
+  const log = await api('/__log');
+  ok(log.filter(l => l.includes('AuthenticateWithQuickConnect')).length === 1, 'exactly one authenticate call');
+  ok(log.filter(l => /AUTH:/.test(l)).every(l => /AUTH:MediaBrowser Client="MojaLoss TV", Device="[^"]+", DeviceId="mltv-[0-9a-f]{24}", Version="0\.1\.1"(, Token="\*\*\*")?$/.test(l)), 'every request uses MediaBrowser header format');
   ok(!log.some(l => /X-Emby/i.test(l)), 'no X-Emby-Token');
+  await api('/__state?revoked=1'); await pg.evaluate(() => MLTV.go('home', {}, true)); await sleep(1500);
+  ok(await scr() === 'signin' && /Approve this TV again/.test(await pg.$eval('h1', e => e.textContent)), '401 → asks for phone approval again');
+  ok(await pg.evaluate(() => !localStorage.getItem('mltest.token')) && (await pg.evaluate(() => localStorage.getItem('mltest.deviceId'))) === dev1, 'revoked token cleared, device id kept');
+  await api('/__state?revoked=0');
+
+  // 9. Exit handling + reduced motion
+  await pg.evaluate(() => { localStorage.setItem('mltest.token', 'mock-token'); localStorage.setItem('mltest.userId', 'u1'); }); await pg.goto(BASE); await sleep(1500);
+  await key(BACK); ok(!(await pg.evaluate(() => window.__exited)) && /Press Back again/.test(await pg.$eval('#toast', e => e.textContent)), 'Back on Home warns first');
+  await key(BACK); ok(await pg.evaluate(() => window.__exited === true), 'second Back exits via tizen.application');
+  await pg.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]); await pg.goto(BASE); await sleep(1200);
+  ok(await pg.$eval('.card', e => getComputedStyle(e).transitionDuration) === '0s', 'reduced motion disables transitions');
   ok(errs.length === 0, 'no page errors ' + errs.join(' | '));
+  console.log(`\n${pass} passed, ${fail} failed`); process.exitCode = fail ? 1 : 0;
   await b.close();
 })();

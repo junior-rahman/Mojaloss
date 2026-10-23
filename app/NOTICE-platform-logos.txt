@@ -1,0 +1,15 @@
+Platform logo marks (app/src/main/res/drawable/platform_logo_*.xml)
+
+Source: Simple Icons v16.35.0 (https://simpleicons.org, https://github.com/simple-icons/simple-icons),
+fetched 2026-10-23 from https://cdn.jsdelivr.net/npm/simple-icons@16.35.0/icons/<slug>.svg
+License: CC0 1.0 Universal (icon SVG data). The marks themselves are trademarks of their
+respective owners; used here only to label platform categories in a personal app.
+
+Included: netflix, primevideo, hulu, hbo, paramountplus, appletv, showtime, crunchyroll.
+Brand tile colours: Simple Icons hex where published (Netflix E50914, Paramount+ 0064FF,
+Showtime B10000, Crunchyroll FF5E00, HBO/Apple TV 000000); Prime Video 00A8E1 and Hulu 1CE783
+are the brands' public primary colours (not in Simple Icons data).
+
+Not available in Simple Icons (monogram fallback used): Hotstar, Disney+, Peacock, ZEE5,
+SonyLIV, ALT Balaji, MX Player, Voot, Hoichoi. mojaloss.stream serves no platform logos
+(checked site HTML/theme assets and WP category data on 2026-10-23).
