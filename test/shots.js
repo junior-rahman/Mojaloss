@@ -34,19 +34,136 @@ const api = async q => (await fetch(M + q)).json();
   const dev1 = await pg.evaluate(() => localStorage.getItem('mltest.deviceId'));
   await sleep(1500);
 
-  // 2. Home
+  // 2. Home + Full-Bleed Backdrop Hero + Live Focused Title Preview
   ok(await scr() === 'home', 'lands on Home after approval');
+  const heroInit = await pg.evaluate(() => {
+    const hEl = document.getElementById('hero');
+    return {
+      hasHero: !!hEl,
+      hasGlass: hEl ? hEl.classList.contains('glass') : true,
+      hasHeroArt: !!document.getElementById('hero-art'),
+      eyebrow: (document.getElementById('hero-eyebrow') || {}).textContent,
+      title: (document.getElementById('hero-title') || {}).textContent,
+      meta: (document.getElementById('hero-meta') || {}).textContent,
+      desc: (document.getElementById('hero-desc') || {}).textContent,
+      play: (document.getElementById('hero-play') || {}).textContent,
+      info: (document.getElementById('hero-info') || {}).textContent,
+      backdropBg: (document.getElementById('backdrop') || { style: {} }).style.backgroundImage,
+      rowsTransform: (document.getElementById('rows') || { style: {} }).style.transform
+    };
+  });
+  ok(heroInit.hasHero && !heroInit.hasGlass && !heroInit.hasHeroArt && heroInit.title === 'Midnight Harbor' && /2026/.test(heroInit.meta) && /38% watched/.test(heroInit.meta) && /Resume from 40:00/.test(heroInit.play) && heroInit.info === 'More Info' && /Items\/it0\/Images\/Backdrop/.test(heroInit.backdropBg), 'Full-bleed Hero renders open editorial layout (no .glass box, no #hero-art) with full-screen #backdrop (' + heroInit.title + ' / ' + heroInit.play + ')');
+  ok(heroInit.rowsTransform === 'translateY(0px)', 'Hero stays fully visible at translateY(0px) on first row focus');
   const rows = await pg.$$eval('section.row', s => s.filter(x => x.style.display !== 'none').map(x => x.id));
   ok(['cw', 'plat', 'lm', 'ls', 'fav'].every(r => rows.includes(r)), 'Home rows: Continue Watching, platforms, Latest Movies, Latest Series, My List (' + rows + ')');
   ok(await pg.$eval('#plat', e => !e.querySelector('h2')), 'platform row has no heading');
   ok(!(await pg.$('nav, .nav, .bottom-nav, .tabbar')), 'no navigation bar/buttons');
   const chips = await pg.$$eval('.chip', es => es.map(e => e.getAttribute('data-slug') + (e.querySelector('svg path') ? ':logo' : ':mono')));
   ok(JSON.stringify(chips) === JSON.stringify(['netflix:logo', 'prime:logo', 'apple:logo', 'hbo:logo']), 'platforms from server categories, logos, empty/non-platform hidden: ' + chips);
-  await key(R); await sleep(400);
+  await key(R); await sleep(350);
+  const heroAfterRight1 = await pg.evaluate(() => ({
+    eyebrow: document.getElementById('hero-eyebrow').textContent,
+    title: document.getElementById('hero-title').textContent,
+    meta: document.getElementById('hero-meta').textContent,
+    play: document.getElementById('hero-play').textContent,
+    backdropBg: document.getElementById('backdrop').style.backgroundImage
+  }));
+  ok(/Northline/.test(heroAfterRight1.title) && /S1E3/.test(heroAfterRight1.title) && /50m/.test(heroAfterRight1.meta) && /24% watched/.test(heroAfterRight1.meta) && /Resume from 12:00/.test(heroAfterRight1.play) && /Items\/it3\/Images\/Backdrop/.test(heroAfterRight1.backdropBg), 'D-pad ArrowRight live-updates Hero & full-screen #backdrop to focused Episode card (' + heroAfterRight1.title + ')');
+  await key(R); await sleep(350);
+  const heroAfterRight2 = await pg.evaluate(() => ({
+    title: document.getElementById('hero-title').textContent,
+    meta: document.getElementById('hero-meta').textContent,
+    info: document.getElementById('hero-info').textContent,
+    backdropBg: document.getElementById('backdrop').style.backgroundImage
+  }));
+  ok(heroAfterRight2.title === 'Salt & Iron' && /2025/.test(heroAfterRight2.meta) && heroAfterRight2.info === 'Episodes & Info' && /Items\/it5\/Images\/Backdrop/.test(heroAfterRight2.backdropBg), 'D-pad ArrowRight live-updates Hero & full-screen #backdrop to focused Series card (' + heroAfterRight2.title + ')');
+  await key(L); await sleep(300);
   await pg.screenshot({ path: OUT + 'tv-home.png' });
+  await pg.screenshot({ path: __dirname + '/out/tv-015-home-hero.png' });
 
   // 3. Platform screen
   await key(D); const slug = await focused(); ok(['netflix','prime','apple','hbo'].includes(slug), 'D-pad down reaches platform row: ' + slug);
+
+  // Verify Upgrade #3 (v0.1.11): Top 10 Trending Today + Next Up + Regional shelves
+  await key(D); await sleep(450); // Down from Platform row -> Top 10 Trending Today (#trending)
+  const trendingCheck = await pg.evaluate(() => ({
+    trendingCount: document.querySelectorAll('#trending .rank-card').length,
+    firstRankNum: (document.querySelector('#trending .rank-card .rank-num') || {}).textContent,
+    firstRankBadge: (document.querySelector('#trending .rank-card .rank-badge') || {}).textContent,
+    focusedInTrending: !!document.querySelector('#trending .rank-card.focused'),
+    heroEyebrow: (document.getElementById('hero-eyebrow') || {}).textContent || '',
+    heroTitle: (document.getElementById('hero-title') || {}).textContent || '',
+    nextUpCount: document.querySelectorAll('#nextup .nextup-card').length,
+    firstNextUpBadge: (document.querySelector('#nextup .nextup-card .ep-badge') || {}).textContent || '',
+    regHindiCount: document.querySelectorAll('#reg-hindi .card').length,
+    regHindiSeriesCount: document.querySelectorAll('#reg-hindi-tv-shows .card').length,
+    regIntlCount: document.querySelectorAll('#reg-international-movies .card').length,
+    bengaliHidden: !document.getElementById('reg-bengali')
+  }));
+  ok(trendingCheck.trendingCount === 10 && trendingCheck.firstRankNum === '1' && trendingCheck.firstRankBadge === '#1 Today', 'Top 10 Trending Today row renders 10 ranked cards with sculpted #1..#10 (' + trendingCheck.trendingCount + ' cards)');
+  ok(trendingCheck.focusedInTrending && /Top 10 Trending Today · #[12]/.test(trendingCheck.heroEyebrow), 'Focusing Top 10 card live-updates Hero eyebrow (' + trendingCheck.heroEyebrow + ' / ' + trendingCheck.heroTitle + ')');
+  ok(trendingCheck.nextUpCount === 2 && trendingCheck.firstNextUpBadge === 'Next Up · S1E4', 'Next Up row renders deduplicated upcoming episodes (' + trendingCheck.nextUpCount + ' cards, first: ' + trendingCheck.firstNextUpBadge + ')');
+  ok(trendingCheck.regHindiCount === 4 && trendingCheck.regHindiSeriesCount === 3 && trendingCheck.regIntlCount === 3 && trendingCheck.bengaliHidden, 'Regional shelves render Hindi Movies (' + trendingCheck.regHindiCount + '), Hindi Series (' + trendingCheck.regHindiSeriesCount + '), International Movies (' + trendingCheck.regIntlCount + '), and hide empty Bengali shelf');
+  await pg.screenshot({ path: __dirname + '/out/tv-019-home-trending.png' });
+  await pg.screenshot({ path: OUT + 'tv-home.png' });
+
+  // Verify v0.1.12 Upgrade #1 & #4: Full-screen coverage, fitViewport auto-scaler & designed shimmer skeletons
+  await pg.setViewport({ width: 1280, height: 720 }); await sleep(150);
+  const scaledRect = await pg.evaluate(() => {
+    MLTV.fitViewport();
+    const r = document.getElementById('root').getBoundingClientRect();
+    return { w: Math.round(r.width), h: Math.round(r.height), tx: document.getElementById('root').style.transform };
+  });
+  ok(scaledRect.w === 1280 && scaledRect.h === 720 && /scale\(/.test(scaledRect.tx), 'fitViewport scales #root to fill 1280x720 TV WebView (' + scaledRect.w + 'x' + scaledRect.h + ')');
+  await pg.setViewport({ width: 1920, height: 1080 }); await sleep(150);
+  const fullRect = await pg.evaluate(() => {
+    MLTV.fitViewport();
+    const r = document.getElementById('root').getBoundingClientRect();
+    const skel = MLTV.homeSkeletonHtml();
+    return { w: Math.round(r.width), h: Math.round(r.height), hasSkel: /skel-card wide skel-pulse/.test(skel) && /skel-chip skel-pulse/.test(skel) };
+  });
+  ok(fullRect.w === 1920 && fullRect.h === 1080 && fullRect.hasSkel, 'Full-screen 1920x1080 coverage & Sage shimmer skeleton HTML verified');
+  await pg.evaluate(() => {
+    const ov = document.createElement('div');
+    ov.id = 'skel-preview-overlay';
+    ov.style.cssText = 'position:fixed;inset:0;background:#0D1612;padding:28px 56px 0;z-index:50;display:flex;flex-direction:column';
+    ov.innerHTML = '<div class="top"><div class="brand"><i></i>MojaLoss <span class="ver-badge">v0.1.12</span></div><div class="actions"><div class="loading-inline" style="padding:0"><span class="spinner-ring"></span><span>Loading library…</span></div></div></div>' + MLTV.homeSkeletonHtml();
+    document.body.appendChild(ov);
+  });
+  await sleep(150);
+  await pg.screenshot({ path: __dirname + '/out/tv-012-loading-skeleton.png' });
+  await pg.evaluate(() => { const ov = document.getElementById('skel-preview-overlay'); if (ov) ov.remove(); });
+
+  // Verify v0.1.12 Upgrade #2: D-pad Down scrolling through Regional shelves (#reg-hindi, #reg-hindi-tv-shows, #reg-international-movies)
+  await key(D); // #nextup
+  await key(D); // #lm
+  await key(D); // #ls
+  await key(D); await sleep(350); // #reg-hindi
+  await key(R); await sleep(250); // 2nd card in #reg-hindi
+  const regScrollCheck = await pg.evaluate(() => {
+    const regEl = document.getElementById('reg-hindi');
+    const rect = regEl ? regEl.getBoundingClientRect() : { top: -999 };
+    const foc = document.querySelector('.focused');
+    return {
+      focusedInHindi: !!(foc && foc.closest('#reg-hindi')),
+      top: Math.round(rect.top),
+      nextOpacity: parseFloat(getComputedStyle(document.getElementById('reg-hindi-tv-shows')).opacity || '0'),
+      eyebrow: (document.getElementById('hero-eyebrow') || {}).textContent || ''
+    };
+  });
+  ok(regScrollCheck.focusedInHindi && regScrollCheck.top >= 280 && regScrollCheck.top <= 450 && regScrollCheck.nextOpacity >= 0.8 && regScrollCheck.eyebrow === 'Hindi Movies', 'Regional shelf #reg-hindi scrolls cleanly on-screen (top=' + regScrollCheck.top + 'px, nextOpacity=' + regScrollCheck.nextOpacity + ', eyebrow=' + regScrollCheck.eyebrow + ')');
+  await pg.screenshot({ path: __dirname + '/out/tv-012-regional-scroll.png' });
+  await key(D); await sleep(250); // #reg-hindi-tv-shows
+  await key(D); await sleep(250); // #reg-international-movies
+  const regIntlCheck = await pg.evaluate(() => {
+    const el = document.getElementById('reg-international-movies');
+    const r = el ? el.getBoundingClientRect() : { top: -999 };
+    const foc = document.querySelector('.focused');
+    return { focused: !!(foc && foc.closest('#reg-international-movies')), top: Math.round(r.top) };
+  });
+  ok(regIntlCheck.focused && regIntlCheck.top >= 280 && regIntlCheck.top <= 450, 'Regional shelf #reg-international-movies scrolls cleanly on-screen (top=' + regIntlCheck.top + 'px)');
+  await key(U, 6); await sleep(350); // Return up to #trending
+  await key(U); await sleep(350); // Return to Platform chips
   await key(L, 3); ok(await focused() === 'netflix', 'D-pad left along row'); await key(OK); await sleep(500);
   ok(await scr() === 'platform' && !(await pg.$('h1')) && !!(await pg.$('.plogo svg path')), 'platform screen shows logo instead of a title');
   ok(await pg.$eval('.pill.on[data-f="latest"]', e => e.textContent) === 'Newest release', 'default sort: Newest release');
@@ -69,16 +186,99 @@ const api = async q => (await fetch(M + q)).json();
   await pg.screenshot({ path: OUT + 'tv-detail.png' });
   await key(BACK); await sleep(600); ok(await scr() === 'home', 'Back: detail → Home');
 
-  // series detail with episodes + play next episode
+  // series detail with Flagship Header, Starring/Director credits, Season Picker, Live Episode Synopsis Preview, Rich Episode Cards, Cast & Crew, More Like This
   await pg.evaluate(() => MLTV.go('detail', { item: { Id: 'it3', Name: 'Northline', Type: 'Series' } })); await sleep(1200);
-  ok(await pg.$$eval('#eps .card', c => c.length) === 4, 'series detail lists episodes');
-  ok(await focused() === 'Play next episode', 'series primary action is Play next episode');
+  const sDetail = await pg.evaluate(() => ({
+    eyebrow: (document.getElementById('detail-eyebrow') || {}).textContent,
+    credits: (document.getElementById('detail-credits') || {}).textContent,
+    playText: (document.getElementById('play') || {}).textContent,
+    hasRestart: !!document.getElementById('restart'),
+    hasWatchedBtn: !!document.getElementById('watched-btn'),
+    seasons: Array.from(document.querySelectorAll('#season-pills .pill[data-season]')).map(p => ({ text: p.textContent, on: p.classList.contains('on') })),
+    jumpPills: Array.from(document.querySelectorAll('#season-pills .pill[data-jump]')).map(p => p.textContent),
+    epPreviewTag: (document.getElementById('ep-prev-tag') || {}).textContent,
+    epPreviewDesc: (document.getElementById('ep-prev-desc') || {}).textContent,
+    epSubs: Array.from(document.querySelectorAll('#eps .ep-card .ep-sub')).map(s => s.textContent),
+    epsCount: document.querySelectorAll('#eps .card').length,
+    nextUpBadges: Array.from(document.querySelectorAll('#eps .ep-badge:not(.watched)')).map(b => b.textContent),
+    watchedBadges: document.querySelectorAll('#eps .ep-badge.watched').length,
+    castCount: document.querySelectorAll('#cast-row .person-card').length,
+    similarCount: document.querySelectorAll('#similar-row .card').length
+  }));
+  ok(/SERIES \u00b7 2 SEASONS \u00b7 6 EPISODES/.test(sDetail.eyebrow), 'Flagship detail eyebrow shows SERIES · 2 SEASONS · 6 EPISODES (' + sDetail.eyebrow + ')');
+  ok(/Starring Amina Rahman, Dev Sen, Nadia Chowdhury/.test(sDetail.credits) && /Directed by Tariq Anwar/.test(sDetail.credits), 'Flagship detail renders Starring & Directed by credits line (' + sDetail.credits + ')');
+  ok(sDetail.seasons.length === 2 && sDetail.seasons[0].on && /Season 1/.test(sDetail.seasons[0].text) && /Season 2/.test(sDetail.seasons[1].text) && sDetail.jumpPills.length === 2, 'Series detail renders Season Picker pills + Cast/Similar quick-jump pills (' + sDetail.seasons.map(s => s.text).join(', ') + ')');
+  ok(sDetail.epsCount === 4 && sDetail.nextUpBadges.includes('Next Up') && sDetail.watchedBadges === 2 && sDetail.epSubs.every(s => s.length > 20), 'Season 1 lists 4 rich episode cards with 2-line synopses, Next Up & Watched badges');
+  ok(/S1 \u00b7 E3 \u2014 Arrival/.test(sDetail.epPreviewTag) && /northern relay/.test(sDetail.epPreviewDesc), 'Live Episode Preview bar initializes to Next Up episode S1E3 (' + sDetail.epPreviewTag + ')');
+  ok(/Resume S1E3 from 0:20/.test(sDetail.playText) && sDetail.hasRestart && sDetail.hasWatchedBtn, 'Series #play button shows specific Next Up episode + From the start + Mark watched buttons');
+  ok(sDetail.castCount === 4 && sDetail.similarCount === 6, 'Detail renders Cast & Crew (' + sDetail.castCount + ') and More Like This (' + sDetail.similarCount + ') rows');
+  const detailCleanCheck = await pg.evaluate(() => {
+    const epsEl = document.getElementById('eps');
+    const epsRect = epsEl ? epsEl.getBoundingClientRect() : { top: 9999 };
+    const artCard = document.getElementById('detail-art-card');
+    return {
+      epsOpacity: epsEl ? getComputedStyle(epsEl).opacity : '0',
+      epsTop: Math.round(epsRect.top),
+      hasArtCard: !!artCard && artCard.getBoundingClientRect().width >= 350
+    };
+  });
+  ok(detailCleanCheck.epsOpacity === '1' && detailCleanCheck.epsTop > 300 && detailCleanCheck.epsTop < 700 && detailCleanCheck.hasArtCard, 'Clutter-free Detail page renders visible #eps immediately (opacity=' + detailCleanCheck.epsOpacity + ', top=' + detailCleanCheck.epsTop + 'px) + right-side key-art card');
   await pg.screenshot({ path: OUT + 'tv-detail-series.png' });
+  await pg.screenshot({ path: OUT + 'tv-detail.png' });
+  await pg.screenshot({ path: __dirname + '/out/tv-017-detail-flagship.png' });
+  await pg.screenshot({ path: __dirname + '/out/tv-012-detail-clean.png' });
+
+  // Move D-pad focus across episode cards and verify #ep-preview live-updates
+  await key(D); // down to #season-pills
+  await key(D); // down to #eps first card (S1E1 Pilot)
+  await sleep(300);
+  const prevE1 = await pg.evaluate(() => ({
+    tag: (document.getElementById('ep-prev-tag') || {}).textContent,
+    desc: (document.getElementById('ep-prev-desc') || {}).textContent
+  }));
+  ok(/S1 \u00b7 E1 \u2014 Pilot/.test(prevE1.tag) && /distress beacon/.test(prevE1.desc), 'Focusing S1E1 card live-updates #ep-preview synopsis (' + prevE1.tag + ')');
+  await key(R); await sleep(300); // right to S1E2 Signal
+  const prevE2 = await pg.evaluate(() => ({
+    tag: (document.getElementById('ep-prev-tag') || {}).textContent,
+    desc: (document.getElementById('ep-prev-desc') || {}).textContent
+  }));
+  ok(/S1 \u00b7 E2 \u2014 Signal/.test(prevE2.tag) && /second signal/.test(prevE2.desc), 'Focusing S1E2 card live-updates #ep-preview synopsis (' + prevE2.tag + ')');
+
+  // Switch to Season 2 via Season Picker pill
+  await pg.evaluate(() => Focus.first('#season-pills .pill[data-season="2"]'));
+  await key(OK); await sleep(350);
+  const s2Eps = await pg.$$eval('#eps .card .ep-title', ts => ts.map(t => t.textContent));
+  ok(s2Eps.length === 2 && /E1Whiteout/.test(s2Eps[0]) && /E2Thaw/.test(s2Eps[1]), 'Clicking Season 2 pill filters #eps to Season 2 episodes (' + s2Eps.join(', ') + ')');
+  // Return to #play button at top and verify Next Up playback
+  await pg.evaluate(() => Focus.first('#play'));
   await api('/__state?direct=1');
   await key(OK); await sleep(2500);
   let pl = await pg.evaluate(() => { const p = MLTV.player(); return p && { id: p.it.Id, t: p.v.currentTime }; });
   ok(pl && pl.id === 'ep3', 'Play next episode → NextUp episode S1E3 (' + (pl && pl.id) + ')');
   ok(pl && pl.t >= 20, 'resumes at saved position 0:20 t=' + (pl && pl.t.toFixed(1)));
+  await key(BACK); await sleep(400);
+
+  // Resume Episode Detail (from Continue Watching): must show full Season Picker & Episode list and allow choosing any other episode
+  await pg.evaluate(() => MLTV.go('detail', { item: { Id: 'ep1', Type: 'Episode', Name: 'Arrival', SeriesName: 'Northline', SeriesId: 'it3', ParentIndexNumber: 1, IndexNumber: 3, RunTimeTicks: 50 * 60e7, UserData: { PlaybackPositionTicks: 12 * 60e7, PlayedPercentage: 24 } } }));
+  await sleep(1200);
+  const epDetail = await pg.evaluate(() => ({
+    eyebrow: (document.getElementById('detail-eyebrow') || {}).textContent,
+    playText: (document.getElementById('play') || {}).textContent,
+    seasons: Array.from(document.querySelectorAll('#season-pills .pill[data-season]')).map(p => p.textContent),
+    epsCount: document.querySelectorAll('#eps .ep-card').length,
+    castCount: document.querySelectorAll('#cast-row .person-card').length,
+    similarCount: document.querySelectorAll('#similar-row .card').length,
+    bdLayers: document.querySelectorAll('#backdrop .bd-layer').length
+  }));
+  ok(/Resume S1E3 from 12:00/.test(epDetail.playText), 'Resume Episode detail #play button shows Resume S1E3 from 12:00 (' + epDetail.playText + ')');
+  ok(epDetail.seasons.length === 2 && epDetail.epsCount === 4 && epDetail.castCount === 4 && epDetail.similarCount === 6, 'Resume Episode detail renders full Season Picker (' + epDetail.seasons.join(', ') + '), all 4 Season 1 episodes, Cast & Crew, and More Like This');
+  ok(epDetail.bdLayers === 2, 'Dual-layer crossfading #backdrop (.bd-layer) active');
+  await pg.screenshot({ path: __dirname + '/out/tv-018-episode-detail-seasons.png' });
+  // Choose another episode (S1E2 Signal) directly from Resume Episode detail screen
+  await pg.evaluate(() => Focus.first('#eps .ep-card[data-id="ep2"]'));
+  await key(OK); await sleep(2200);
+  let plEp2 = await pg.evaluate(() => { const p = MLTV.player(); return p && p.it.Id; });
+  ok(plEp2 === 'ep2', 'Clicking another episode card on Resume Episode detail plays that chosen episode (' + plEp2 + ')');
   await key(BACK); await sleep(400);
 
   // 5. Player: direct play, progress, keys, tracks, retry
@@ -140,7 +340,7 @@ const api = async q => (await fetch(M + q)).json();
   ok(dev1 === await pg.evaluate(() => localStorage.getItem('mltest.deviceId')), 'device id stable');
   const log = await api('/__log');
   ok(log.filter(l => l.includes('AuthenticateWithQuickConnect')).length === 1, 'exactly one authenticate call');
-  ok(log.filter(l => /AUTH:/.test(l)).every(l => /AUTH:MediaBrowser Client="MojaLoss TV", Device="[^"]+", DeviceId="mltv-[0-9a-f]{24}", Version="0\.1\.2"(, Token="\*\*\*")?$/.test(l)), 'every request uses MediaBrowser header format');
+  ok(log.filter(l => /AUTH:/.test(l)).every(l => /AUTH:MediaBrowser Client="MojaLoss TV", Device="[^"]+", DeviceId="mltv-[0-9a-f]{24}", Version="0\.1\.12"(, Token="\*\*\*")?$/.test(l)), 'every request uses MediaBrowser header format');
   ok(!log.some(l => /X-Emby/i.test(l)), 'no X-Emby-Token');
   await api('/__state?revoked=1'); await pg.evaluate(() => MLTV.go('home', {}, true)); await sleep(1500);
   ok(await scr() === 'signin' && /Approve this TV again/.test(await pg.$eval('h1', e => e.textContent)), '401 → asks for phone approval again');
@@ -153,13 +353,15 @@ const api = async q => (await fetch(M + q)).json();
   await key(BACK); ok(await pg.evaluate(() => window.__exited === true), 'second Back exits via tizen.application');
   await pg.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]); await pg.goto(BASE); await sleep(1200);
   ok(await pg.$eval('.card', e => getComputedStyle(e).transitionDuration) === '0s', 'reduced motion disables transitions');
-  // 10. In-App OTA Update system: remote navigation, SHA-256 verification (WebCrypto + pure-JS), tamper rejection, update to 0.1.3, automatic rollback on crash
+  // 10. In-App OTA Update system: remote navigation, SHA-256 verification (WebCrypto + pure-JS), tamper rejection, update to 0.1.10, automatic rollback on crash
   await pg.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'no-preference' }]);
   await api('/__state?ota=none');
   await pg.goto(BASE); await sleep(1500);
-  ok(await pg.evaluate(() => MLTV_OTA.version() === '0.1.2' && MLTV_OTA.source() === 'builtin'), 'baseline boots v0.1.2 from builtin .wgt');
+  ok(await pg.evaluate(() => MLTV_OTA.version() === '0.1.12' && MLTV_OTA.source() === 'builtin'), 'baseline boots v0.1.11 from builtin .wgt');
   ok(await pg.evaluate(async () => (await MLTV_OTA.sha256Hex('mojaloss-tv-ota')) === MLTV_OTA.sha256Pure('mojaloss-tv-ota')), 'pure-JS SHA-256 matches WebCrypto SHA-256');
-  // Navigate with remote D-pad Up -> Right to #update-btn and press OK
+  // Navigate with remote D-pad Up -> Hero buttons -> Up -> Top bar #update-btn and press OK
+  await key(U);
+  ok(await pg.evaluate(() => (document.querySelector('.focused') || {}).id === 'hero-play'), 'D-pad Up from Continue Watching focuses #hero-play');
   await key(U);
   if ((await pg.evaluate(() => (document.querySelector('.focused') || {}).id)) === 'search') await key(R);
   ok(await pg.evaluate(() => (document.querySelector('.focused') || {}).id === 'update-btn'), 'D-pad navigates to top-right Update button on Home');
@@ -171,17 +373,17 @@ const api = async q => (await fetch(M + q)).json();
   // Tampered bundle must be rejected by SHA-256 verification
   await api('/__state?ota=tampered');
   await pg.evaluate(() => MLTV.openUpdateModal()); await sleep(200);
-  await key(OK); await sleep(600); // Check for updates -> finds 0.1.3 (tampered)
-  ok(!!(await pg.$('#ota-install-now')), 'Update modal detects new version v0.1.3');
+  await key(OK); await sleep(600); // Check for updates -> finds 0.1.10 (tampered)
+  ok(!!(await pg.$('#ota-install-now')), 'Update modal detects new version v0.1.11');
   await key(OK); await sleep(600); // Try to install tampered bundle
   const tamperMsg = await pg.$eval('#ota-modal-status', e => e.textContent);
   ok(/SHA-256 mismatch/i.test(tamperMsg) && await pg.evaluate(() => !localStorage.getItem('mltv_ota_bundle')), 'tampered OTA bundle rejected by SHA-256 check: ' + tamperMsg);
   await key(BACK); await sleep(200);
 
-  // Valid v0.1.3 bundle: check, show banner + modal screenshot, install, reload into v0.1.3
-  await api('/__state?ota=v013');
+  // Valid v0.1.11 bundle: check, show banner + modal screenshot, install, reload into v0.1.11
+  await api('/__state?ota=v019');
   await pg.evaluate(() => MLTV_OTA.checkForUpdates(true)); await sleep(600);
-  ok(await pg.$eval('#ota-banner', e => e.style.display !== 'none' && /Update available \(v0\.1\.3\)/.test(e.textContent)), 'Home banner shows Update available (v0.1.3)');
+  ok(await pg.$eval('#ota-banner', e => e.style.display !== 'none' && /Update available \(v0\.1\.13\)/.test(e.textContent)), 'Home banner shows Update available (v0.1.11)');
   await pg.evaluate(() => MLTV.openUpdateModal()); await sleep(300);
   await pg.screenshot({ path: OUT + 'tv-update.png' });
   await Promise.all([
@@ -189,17 +391,17 @@ const api = async q => (await fetch(M + q)).json();
     key(OK) // Click #ota-install-now -> downloads, verifies SHA-256, saves to storage, reloads
   ]);
   await sleep(1500);
-  ok(await pg.evaluate(() => MLTV_OTA.version() === '0.1.3' && MLTV_OTA.versionCode() === 3 && MLTV_OTA.source() === 'ota'), 'reloaded into verified OTA v0.1.3 bundle');
-  ok(await pg.$eval('#ver-badge', e => e.textContent) === 'v0.1.3', 'Home header badge shows v0.1.3 after OTA update');
+  ok(await pg.evaluate(() => MLTV_OTA.version() === '0.1.13' && MLTV_OTA.versionCode() === 13 && MLTV_OTA.source() === 'ota'), 'reloaded into verified OTA v0.1.11 bundle');
+  ok(await pg.$eval('#ver-badge', e => e.textContent) === 'v0.1.13', 'Home header badge shows v0.1.11 after OTA update');
 
-  // Faulty/crashing OTA bundle: bootloader catches boot throw and automatically rolls back to baked-in 0.1.2
+  // Faulty/crashing OTA bundle: bootloader catches boot throw and automatically rolls back to baked-in 0.1.10
   await api('/__state?ota=crash');
   const crashBundle = await api('/ota/tv-manifest.json');
   await pg.evaluate(b => localStorage.setItem('mltv_ota_bundle', JSON.stringify(b)), crashBundle);
   await api('/__state?ota=none');
   await pg.goto(BASE); await sleep(1500);
   const rb = await pg.evaluate(() => ({ ver: MLTV_OTA.version(), src: MLTV_OTA.source(), rolledBackFrom: MLTV_OTA.state().rolledBackFrom, err: MLTV_OTA.state().lastRollbackError, cached: localStorage.getItem('mltv_ota_bundle') }));
-  ok(rb.ver === '0.1.2' && rb.src === 'builtin' && rb.rolledBackFrom === '0.1.3' && !rb.cached, 'crashing OTA bundle automatically rolls back to baked-in v0.1.2 (' + rb.err + ')');
+  ok(rb.ver === '0.1.12' && rb.src === 'builtin' && rb.rolledBackFrom === '0.1.13' && !rb.cached, 'crashing OTA bundle automatically rolls back to baked-in v0.1.11 (' + rb.err + ')');
 
   ok(errs.length === 0, 'no page errors ' + errs.join(' | '));
   console.log(`\n${pass} passed, ${fail} failed`); process.exitCode = fail ? 1 : 0;

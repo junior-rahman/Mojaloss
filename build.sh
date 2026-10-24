@@ -34,7 +34,7 @@ bundle = {
     "versionCode": vcode,
     "sha256": sha,
     "releasedAt": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    "notes": f"MojaLoss TV v{ver} OTA bundle",
+    "notes": f"v{ver}: Full-screen 1080p viewport scaling, fixed Regional shelf scrolling, clutter-free Detail stage, and Sage shimmer loading skeletons",
     "css": s,
     "js": js_bundle,
     "logos": logos_obj
@@ -72,6 +72,33 @@ else:
 Q
 chmod 600 "$HOME/tizen-studio-data/profile/profiles.xml"
 DIST_PW=$(cat /tmp/.mltv_dist_pw); rm -f /tmp/.mltv_dist_pw
-(cd build && (sleep 3; echo "$PW"; sleep 2; echo "$DIST_PW"; sleep 6) 2>/dev/null | script -qc "$T package -t wgt -s mltv -- ." /dev/null >/dev/null 2>&1)
+python3 - "$T" "$PW" "$DIST_PW" <<'SIGN'
+import pty, os, sys, select, time
+
+tizen_bin, pw, dist_pw = sys.argv[1:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.chdir("build")
+    os.execv(tizen_bin, [tizen_bin, "package", "-t", "wgt", "-s", "mltv", "--", "."])
+else:
+    start = time.time()
+    while time.time() - start < 20:
+        r, _, _ = select.select([fd], [], [], 0.5)
+        if r:
+            try:
+                data = os.read(fd, 4096)
+            except OSError:
+                break
+            if not data:
+                break
+            low = data.decode("utf-8", "ignore").lower()
+            if "yes:" in low or "(y/n)" in low or "[y/n]" in low or "default" in low:
+                os.write(fd, b"y\n")
+            elif "distributor" in low and "password:" in low:
+                os.write(fd, (dist_pw + "\n").encode())
+            elif "password:" in low:
+                os.write(fd, (pw + "\n").encode())
+    os.waitpid(pid, 0)
+SIGN
 V=$(grep -o 'version="[0-9.]*"' app/config.xml | head -2 | tail -1 | cut -d'"' -f2)
 cp build/MojaLoss.wgt "MojaLoss-tv-$V.wgt"; unzip -l "MojaLoss-tv-$V.wgt" | grep -q signature1.xml && sha256sum "MojaLoss-tv-$V.wgt"

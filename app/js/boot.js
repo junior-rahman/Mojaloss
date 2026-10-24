@@ -4,8 +4,8 @@
       rolls back automatically to the baked-in .wgt files so a bad update can never brick the TV.
    3. Provides window.MLTV_OTA for checking, downloading, SHA-256 verifying, and applying updates. */
 (function () {
-  var BUILTIN_VERSION = '0.1.2';
-  var BUILTIN_VERSION_CODE = 2;
+  var BUILTIN_VERSION = '0.1.12';
+  var BUILTIN_VERSION_CODE = 12;
   var STORAGE_KEY = 'mltv_ota_bundle';
   var DB_NAME = 'mltv_ota_db';
   var STORE_NAME = 'bundles';
@@ -159,8 +159,9 @@
   }
 
   function fetchJson(url) {
+    var u = (url.indexOf('raw.githubusercontent.com') >= 0) ? (url + (url.indexOf('?') >= 0 ? '&' : '?') + '_t=' + Date.now()) : url;
     return Promise.race([
-      fetch(url, { cache: 'no-store' }),
+      fetch(u, { cache: 'no-store' }),
       new Promise(function (_, rej) { setTimeout(function () { rej(new Error('timeout')); }, 12000); })
     ]).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
