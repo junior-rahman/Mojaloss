@@ -17,7 +17,6 @@ open('build/css/app.css', 'w').write(s)
 cfg = open('app/config.xml').read()
 ver = re.search(r'<widget[^>]+version="([0-9.]+)"', cfg).group(1)
 parts = [int(x) for x in ver.split('.')]
-# versionCode: 0.1.0 -> 0, 0.1.1 -> 1, 0.1.2 -> 2, 0.1.3 -> 3 (or major*10000 + minor*100 + patch - 100)
 vcode = parts[0] * 10000 + (parts[1] - 1) * 100 + parts[2]
 
 logos_src = open('build/js/logos.js').read()
@@ -46,15 +45,33 @@ for out in ('dist/tv-ota-bundle.json', 'dist/tv-manifest.json'):
 print(f"OTA bundle ready: v{ver} (versionCode={vcode}) sha256={sha}")
 P
 T=$HOME/tizen-studio/tools/ide/bin/tizen; PW=$(cat $HOME/.mltv-author-pw)
-# The CLI cannot read its own encrypted passwords on a headless box; put them back as plain text (file is mode 600, outside git).
+# If Samsung VD certificates exist in ~/SamsungCertificate/mltv, use them; otherwise use fallback Tizen certs.
 python3 - "$HOME/tizen-studio-data/profile/profiles.xml" "$PW" <<'Q'
-import sys,re
-f,pw=sys.argv[1:];s=open(f).read()
-s=re.sub(r'(mltv-author.p12" password=")[^"]*',lambda m:m.group(1)+pw,s)
-s=re.sub(r'(tizen-distributor-signer.p12" password=")[^"]*',lambda m:m.group(1)+'tizenpkcs12passfordsigner',s)
-open(f,'w').write(s)
+import os, sys, re
+f, pw = sys.argv[1:]
+sam_dir = os.path.expanduser('~/SamsungCertificate/mltv')
+if os.path.exists(os.path.join(sam_dir, 'author.p12')) and os.path.exists(os.path.join(sam_dir, 'distributor.p12')):
+    ca_dir = os.path.abspath('samsung-cert/ca')
+    xml = f"""<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<profiles active="mltv" version="3.1">
+<profile name="mltv">
+<profileitem ca="{ca_dir}/vd_tizen_dev_author_ca.cer" distributor="0" key="{sam_dir}/author.p12" password="{pw}" rootca=""/>
+<profileitem ca="{ca_dir}/vd_tizen_dev_public2.crt" distributor="1" key="{sam_dir}/distributor.p12" password="{pw}" rootca=""/>
+<profileitem ca="" distributor="2" key="" password="" rootca=""/>
+</profile>
+</profiles>
+"""
+    open(f, 'w').write(xml)
+    open('/tmp/.mltv_dist_pw', 'w').write(pw)
+else:
+    s = open(f).read()
+    s = re.sub(r'(mltv-author.p12" password=")[^"]*', lambda m: m.group(1) + pw, s)
+    s = re.sub(r'(tizen-distributor-signer.p12" password=")[^"]*', lambda m: m.group(1) + 'tizenpkcs12passfordsigner', s)
+    open(f, 'w').write(s)
+    open('/tmp/.mltv_dist_pw', 'w').write('tizenpkcs12passfordsigner')
 Q
 chmod 600 "$HOME/tizen-studio-data/profile/profiles.xml"
-(cd build && (sleep 3; echo "$PW"; sleep 2; echo tizenpkcs12passfordsigner; sleep 6) 2>/dev/null | script -qc "$T package -t wgt -s mltv -- ." /dev/null >/dev/null 2>&1)
+DIST_PW=$(cat /tmp/.mltv_dist_pw); rm -f /tmp/.mltv_dist_pw
+(cd build && (sleep 3; echo "$PW"; sleep 2; echo "$DIST_PW"; sleep 6) 2>/dev/null | script -qc "$T package -t wgt -s mltv -- ." /dev/null >/dev/null 2>&1)
 V=$(grep -o 'version="[0-9.]*"' app/config.xml | head -2 | tail -1 | cut -d'"' -f2)
 cp build/MojaLoss.wgt "MojaLoss-tv-$V.wgt"; unzip -l "MojaLoss-tv-$V.wgt" | grep -q signature1.xml && sha256sum "MojaLoss-tv-$V.wgt"

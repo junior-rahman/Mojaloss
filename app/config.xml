@@ -7,7 +7,6 @@
   <name>MojaLoss</name>
   <tizen:privilege name="http://tizen.org/privilege/internet"/>
   <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice"/>
-  <tizen:privilege name="http://developer.samsung.com/privilege/avplay"/>
   <access origin="https://mojaloss.stream" subdomains="true"/>
   <access origin="https://www.mojaloss.stream" subdomains="true"/>
   <access origin="https://raw.githubusercontent.com" subdomains="true"/>
