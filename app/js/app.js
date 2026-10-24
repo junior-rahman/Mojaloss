@@ -33,6 +33,7 @@
 
   function go(name, args, replace) { if (screen && screen.cleanup) screen.cleanup(); if (screen && !replace) stack.push(screen); screen = { name: name, args: args || {} }; render(); }
   function back() {
+    if (document.getElementById('update-modal')) { closeUpdateModal(); return; }
     if (player) { if (player.closeMenu()) return; return stopPlayer(); }
     if (screen && screen.cleanup) screen.cleanup();
     if (stack.length) { screen = stack.pop(); render(); return; }
@@ -62,7 +63,93 @@
     each((scope || root).querySelectorAll('.card'), function (c) { c.onclick = function () { var it = map[c.getAttribute('data-id')]; if (it) (fn || function (x) { go('detail', { item: x }); })(it); }; });
   }
   function artFocus(map) { Focus.onFocus = function (e) { var it = map[e.getAttribute('data-id')]; if (it) art(Api.img(it, 'Backdrop', 1920)); }; }
-  function topbar(extra) { return '<div class="top"><div class="brand"><i></i>MojaLoss</div><div class="actions">' + (extra || '') + '</div></div>'; }
+  function curVer() { return (window.MLTV_OTA && MLTV_OTA.version()) || '0.1.2'; }
+  function topbar(extra) { return '<div class="top"><div class="brand"><i></i>MojaLoss <span class="ver-badge" id="ver-badge">v' + h(curVer()) + '</span></div><div class="actions">' + (extra || '') + '</div></div>'; }
+
+  /* In-app OTA Update modal & banner */
+  var preModalFocus = null;
+  function closeUpdateModal() {
+    var m = document.getElementById('update-modal');
+    if (m && m.parentNode) m.parentNode.removeChild(m);
+    if (preModalFocus && document.body.contains(preModalFocus)) Focus.set(preModalFocus);
+    else Focus.first('.focusable');
+  }
+  function openUpdateModal() {
+    preModalFocus = Focus.current();
+    var m = document.getElementById('update-modal');
+    if (!m) {
+      m = document.createElement('div');
+      m.id = 'update-modal';
+      m.className = 'modal-backdrop';
+      document.body.appendChild(m);
+    }
+    var st = window.MLTV_OTA ? MLTV_OTA.state() : { activeVersion: '0.1.2', activeSource: 'builtin', builtinVersion: '0.1.2' };
+    var avail = st.availableUpdate;
+    var statusHtml = st.updating ? 'Downloading & verifying SHA-256 update package…' :
+      st.checking ? 'Checking GitHub for updates…' :
+      st.lastCheckError ? ('Update check error: ' + h(st.lastCheckError)) :
+      avail ? ('New update available: v' + h(avail.version) + (avail.notes ? ' — ' + h(avail.notes) : '')) :
+      'Your TV app is up to date.';
+    m.innerHTML = '<div class="modal-card glass">' +
+      '<div class="brand"><i></i>MojaLoss TV Update</div>' +
+      '<h1 style="margin-top:22px;font-size:44px">App Version v' + h(st.activeVersion) + '</h1>' +
+      '<div class="meta" style="margin-top:14px"><span>Source: ' + h(st.activeSource === 'ota' ? 'OTA Bundle' : 'Built-in WGT') + '</span><span>Baseline: v' + h(st.builtinVersion) + '</span></div>' +
+      '<p class="ota-status" id="ota-modal-status">' + statusHtml + '</p>' +
+      '<div class="actions" style="margin-top:32px">' +
+      (avail ? '<div class="btn primary focusable" id="ota-install-now">Install v' + h(avail.version) + ' now</div>' : '') +
+      '<div class="btn ' + (avail ? '' : 'primary ') + 'focusable" id="ota-check-now">Check for updates</div>' +
+      (st.activeSource === 'ota' ? '<div class="btn focusable" id="ota-reset-builtin">Restore built-in v' + h(st.builtinVersion) + '</div>' : '') +
+      '<div class="btn focusable" id="ota-modal-close">Close</div>' +
+      '</div></div>';
+    var instBtn = document.getElementById('ota-install-now');
+    if (instBtn) instBtn.onclick = function () {
+      var sEl = document.getElementById('ota-modal-status');
+      if (sEl) sEl.textContent = 'Downloading & verifying SHA-256…';
+      MLTV_OTA.installUpdate().then(function () {
+        toast('Updated! Reloading…');
+      }, function (err) {
+        var sEl2 = document.getElementById('ota-modal-status');
+        if (sEl2) sEl2.textContent = 'Update rejected: ' + (err && err.message ? err.message : 'verification failed');
+        toast('Update failed verification');
+      });
+    };
+    document.getElementById('ota-check-now').onclick = function () {
+      var sEl = document.getElementById('ota-modal-status');
+      if (sEl) sEl.textContent = 'Checking GitHub for updates…';
+      MLTV_OTA.checkForUpdates(true).then(function (res) {
+        if (document.getElementById('update-modal')) openUpdateModal();
+        if (res && res.hasUpdate) toast('Update v' + res.remote.version + ' is ready');
+        else if (!res.error) toast('Already on the latest version (v' + curVer() + ')');
+      });
+    };
+    var rstBtn = document.getElementById('ota-reset-builtin');
+    if (rstBtn) rstBtn.onclick = function () { MLTV_OTA.resetToBuiltin(); };
+    document.getElementById('ota-modal-close').onclick = closeUpdateModal;
+    Focus.first(avail ? '#ota-install-now' : '#ota-check-now');
+  }
+  function refreshUpdateUi() {
+    if (!window.MLTV_OTA) return;
+    var st = MLTV_OTA.state(), b = document.getElementById('ota-banner'), u = document.getElementById('update-btn');
+    if (u) {
+      u.innerHTML = st.availableUpdate ? ('Update · v' + h(st.availableUpdate.version)) : ('Update · v' + h(st.activeVersion));
+      if (st.availableUpdate) u.classList.add('has-update'); else u.classList.remove('has-update');
+    }
+    if (b) {
+      if (st.availableUpdate) {
+        b.style.display = 'flex';
+        b.innerHTML = '<span><b>Update available (v' + h(st.availableUpdate.version) + ')</b>' + (st.availableUpdate.notes ? ' — ' + h(st.availableUpdate.notes) : '') + '</span><span class="pill on">Press OK to update now</span>';
+        b.classList.add('focusable');
+        b.onclick = function () {
+          toast('Updating to v' + st.availableUpdate.version + '…');
+          MLTV_OTA.installUpdate().catch(function (err) { toast('Update failed: ' + (err && err.message ? err.message : 'error')); });
+        };
+      } else {
+        b.style.display = 'none';
+        b.classList.remove('focusable');
+      }
+    }
+  }
+  if (window.MLTV_OTA) MLTV_OTA.onChange(refreshUpdateUi);
   function norm(s) { return String(s).toLowerCase().replace(/&amp;/g, '&').replace(/[^a-z0-9]+/g, ''); }
 
   var platformCache = null;
@@ -112,8 +199,12 @@
     },
 
     home: function () {
-      root.innerHTML = topbar('<div class="btn focusable" id="search">Search</div>') + '<div class="rows"><div class="rows-inner" id="rows"><div class="empty">Loading\u2026</div></div></div>';
+      root.innerHTML = topbar('<div class="btn focusable" id="search">Search</div><div class="btn focusable" id="update-btn">Update · v' + h(curVer()) + '</div>') +
+        '<div id="ota-banner" class="ota-banner glass" style="display:none"></div>' +
+        '<div class="rows"><div class="rows-inner" id="rows"><div class="empty">Loading…</div></div></div>';
       document.getElementById('search').onclick = function () { go('search'); };
+      document.getElementById('update-btn').onclick = openUpdateModal;
+      refreshUpdateUi();
       var me = screen;
       Promise.all([Api.resume(), Api.latest('Movie'), Api.latest('Series'), Api.favorites().catch(function () { return { Items: [] }; })]).then(function (r) {
         if (screen !== me) return;
@@ -290,6 +381,8 @@
   document.addEventListener('mouseover', function (e) { var f = e.target.closest && e.target.closest('.focusable'); if (f) Focus.set(f); });
   document.addEventListener('visibilitychange', function () { if (document.hidden && player) player.v.pause(); }); // Smart Hub / source switch
 
-  window.MLTV = { go: go, play: play, registeredKeys: registered, player: function () { return player; }, screen: function () { return screen && screen.name; } }; // test hooks
+  window.MLTV = { go: go, play: play, openUpdateModal: openUpdateModal, closeUpdateModal: closeUpdateModal, registeredKeys: registered, player: function () { return player; }, screen: function () { return screen && screen.name; } }; // test hooks
+  if (window.__mltvBootOk) window.__mltvBootOk();
   go(Api.signedIn() ? 'home' : 'signin');
+  if (window.MLTV_OTA) setTimeout(function () { MLTV_OTA.checkForUpdates(true); }, 600);
 })();

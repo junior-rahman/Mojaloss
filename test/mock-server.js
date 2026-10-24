@@ -1,5 +1,5 @@
 // Mock Jellyfin + WordPress for tests. Never contacts mojaloss.stream.
-const http = require('http'), fs = require('fs'), path = require('path');
+const http = require('http'), fs = require('fs'), path = require('path'), crypto = require('crypto');
 const APP = path.join(__dirname, '..', 'app');
 const log = [];
 const palette = ['#2f5d4b','#4a3b5c','#5c3b3b','#3b4f5c','#5c543b','#3b5c45','#6b4a2f','#2f4a6b'];
@@ -13,7 +13,31 @@ const all = items.concat(resume.slice(1));
 const cats = [{ id: 1, count: 300, name: 'TV Shows', slug: 'tv-shows', parent: 0 }, { id: 10, count: 120, name: 'Netflix', slug: 'netflix', parent: 0 }, { id: 11, count: 80, name: 'Prime Video', slug: 'prime', parent: 0 },
   { id: 12, count: 40, name: 'Apple TV+', slug: 'apple', parent: 0 }, { id: 13, count: 25, name: 'HBO Max', slug: 'hbo', parent: 0 }, { id: 14, count: 9, name: 'Hoichoi', slug: 'hoichoi', parent: 0 /* posts not in library → hidden */ }, { id: 15, count: 0, name: 'Voot', slug: 'voot', parent: 0 }, { id: 16, count: 50, name: 'Action', slug: 'action', parent: 0 }];
 const posts = { 10: [0, 1, 2, 3, 4, 9], 11: [5, 6, 7], 12: [8, 10], 13: [11, 2], 14: [] };
-const state = { revoked: false, favs: { it2: true }, reports: [], direct: false };
+const state = { revoked: false, favs: { it2: true }, reports: [], direct: false, otaMode: 'none' };
+function makeOtaBundle(mode) {
+  const base = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'dist', 'tv-ota-bundle.json'), 'utf8'));
+  if (mode === 'none') return base; // v0.1.2 (versionCode 2) -> no update
+  const ver = '0.1.3', vcode = 3;
+  let css = base.css + '\n.ver-badge{border-color:#B4D2BD}';
+  let js = base.js.replace(/0\.1\.2/g, '0.1.3');
+  if (mode === 'crash') {
+    js = 'throw new Error("Simulated OTA boot crash in 0.1.3");';
+  }
+  const canonical = `${ver}\n${vcode}\n${css}\n${js}`;
+  const sha = mode === 'tampered'
+    ? 'deadbeef00000000000000000000000000000000000000000000000000000000'
+    : crypto.createHash('sha256').update(canonical, 'utf8').digest('hex');
+  return {
+    version: ver,
+    versionCode: vcode,
+    sha256: sha,
+    releasedAt: '2026-10-24T20:00:00Z',
+    notes: 'Faster platform rows & instant OTA updates',
+    css: css,
+    js: js,
+    logos: base.logos
+  };
+}
 const eps = [1,2,3,4].map(n => ({ Id: 'ep' + n, Type: 'Episode', Name: ['Pilot','Signal','Arrival','Crossing'][n-1], SeriesName: 'Northline', SeriesId: 'it3', SeriesPrimaryImageTag: 't', ParentBackdropItemId: 'it3', ParentBackdropImageTags: ['b'], ParentIndexNumber: 1, IndexNumber: n, RunTimeTicks: 50 * 60e7, ImageTags: { Primary: 't' }, Overview: 'Episode fixture.', UserData: { PlaybackPositionTicks: n === 3 ? 20e7 : 0, PlayedPercentage: n === 3 ? 24 : 0 } }));
 let qc = { secret: 'mock-secret', code: '482915', polls: 0 };
 function svg(id, w, h) { const i = parseInt(String(id).replace(/\D/g, '')) || 0; const it = all.find(x => x.Id === id) || {}; const c = palette[i % palette.length];
@@ -23,7 +47,9 @@ http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x'), p = u.pathname;
   log.push(req.method + ' ' + p + (req.headers.authorization ? ' AUTH:' + req.headers.authorization.replace(/Token="[^"]+"/, 'Token="***"') : ''));
   if (p === '/__log') return json(res, log);
-  if (p === '/__state') { if (u.searchParams.get('revoked')) state.revoked = u.searchParams.get('revoked') === '1'; if (u.searchParams.get('direct')) state.direct = u.searchParams.get('direct') === '1'; return json(res, { revoked: state.revoked, reports: state.reports }); }
+  if (p === '/__state') { if (u.searchParams.get('revoked')) state.revoked = u.searchParams.get('revoked') === '1'; if (u.searchParams.get('direct')) state.direct = u.searchParams.get('direct') === '1'; if (u.searchParams.get('ota')) state.otaMode = u.searchParams.get('ota'); return json(res, { revoked: state.revoked, reports: state.reports, otaMode: state.otaMode }); }
+  if (p === '/ota/tv-manifest.json' || p === '/ota/tv-ota-bundle.json') return json(res, makeOtaBundle(state.otaMode));
+  if (p === '/ota/releases/latest') return json(res, { tag_name: 'tv-v0.1.3', assets: [{ name: 'tv-ota-bundle.json', browser_download_url: 'http://localhost:8787/ota/tv-ota-bundle.json' }] });
   if (p === '/fixtures/clip.mp4') { const f = path.join(__dirname, 'fixtures/clip.mp4'), st = fs.statSync(f), r = req.headers.range;
     if (r) { const [a, b] = r.replace('bytes=', '').split('-'); const s0 = +a, e0 = b ? +b : st.size - 1; res.writeHead(206, { 'Content-Range': `bytes ${s0}-${e0}/${st.size}`, 'Accept-Ranges': 'bytes', 'Content-Length': e0 - s0 + 1, 'Content-Type': 'video/mp4' }); return fs.createReadStream(f, { start: s0, end: e0 }).pipe(res); }
     res.writeHead(200, { 'Content-Length': st.size, 'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes' }); return fs.createReadStream(f).pipe(res); }

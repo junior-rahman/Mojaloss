@@ -4,7 +4,7 @@ var Api = (function () {
   var JF = mock ? mock + '/jelly' : 'https://mojaloss.stream/jelly';
   var WP = mock ? mock + '/wp-json/wp/v2/' : 'https://www.mojaloss.stream/wp-json/wp/v2/';
   var NS = mock ? 'mltest.' : 'ml.';
-  var VERSION = '0.1.1';
+  var VERSION = '0.1.2';
   var PLATFORM_SLUGS = ['netflix','prime','apple','disney','hbo','hulu','paramount','peacock','hotstar','zee5','sonyliv','altbalaji','mxplayer','voot','hoichoi','cruncyroll','crunchyroll','showtime'];
 
   function get(k) { try { return localStorage.getItem(NS + k); } catch (e) { return null; } }
@@ -26,7 +26,7 @@ var Api = (function () {
   function userId() { return get('userId'); }
   function esc(s) { return String(s).replace(/["\\,]/g, ''); }
   function authHeader() {
-    var h = 'MediaBrowser Client="MojaLoss TV", Device="' + esc(deviceName()) + '", DeviceId="' + deviceId() + '", Version="' + VERSION + '"';
+    var h = 'MediaBrowser Client="MojaLoss TV", Device="' + esc(deviceName()) + '", DeviceId="' + deviceId() + '", Version="' + ((window.MLTV_OTA && MLTV_OTA.version()) || VERSION) + '"';
     var t = token(); if (t) h += ', Token="' + t + '"';
     return h;
   }

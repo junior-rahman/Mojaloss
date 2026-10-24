@@ -1,7 +1,7 @@
 /* Spatial D-pad navigation: picks nearest .focusable in the pressed direction. */
 var Focus = (function () {
   var cur = null;
-  function all() { var scope = document.getElementById('player') || document; /* the player is modal */ return Array.prototype.slice.call(scope.querySelectorAll('.focusable')).filter(function (e) { return e.offsetParent !== null || e.closest('#player'); }); }
+  function all() { var scope = document.getElementById('player') || document.getElementById('update-modal') || document; /* the player is modal */ return Array.prototype.slice.call(scope.querySelectorAll('.focusable')).filter(function (e) { return e.offsetParent !== null || e.closest('#player'); }); }
   function rect(e) { return e.getBoundingClientRect(); }
   function set(e) {
     if (!e) return; if (cur) cur.classList.remove('focused');
