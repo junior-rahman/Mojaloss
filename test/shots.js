@@ -641,7 +641,7 @@ const api = async q => (await fetch(M + q)).json();
   ok(dev1 === await pg.evaluate(() => localStorage.getItem('mltest.deviceId')), 'device id stable');
   const log = await api('/__log');
   ok(log.filter(l => l.includes('AuthenticateWithQuickConnect')).length === 1, 'exactly one authenticate call');
-  ok(log.filter(l => /AUTH:/.test(l)).every(l => /AUTH:MediaBrowser Client="MojaLoss TV", Device="[^"]+", DeviceId="mltv-[0-9a-f]{24}", Version="0\.1\.(23|27)"(, Token="\*\*\*")?$/.test(l)), 'every request uses MediaBrowser header format');
+  ok(log.filter(l => /AUTH:/.test(l)).every(l => /AUTH:MediaBrowser Client="MojaLoss TV", Device="[^"]+", DeviceId="mltv-[0-9a-f]{24}", Version="0\.1\.(23|27|28)"(, Token="\*\*\*")?$/.test(l)), 'every request uses MediaBrowser header format');
   ok(!log.some(l => /X-Emby/i.test(l)), 'no X-Emby-Token');
   await api('/__state?revoked=1'); await pg.evaluate(() => MLTV.go('home', {}, true)); await sleep(1500);
   ok(await scr() === 'signin' && /Approve this TV again/.test(await pg.$eval('h1', e => e.textContent)), '401 → asks for phone approval again');
@@ -658,7 +658,7 @@ const api = async q => (await fetch(M + q)).json();
   await pg.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'no-preference' }]);
   await api('/__state?ota=none');
   await pg.goto(BASE); await sleep(1500);
-  ok(await pg.evaluate(() => MLTV_OTA.version() === '0.1.27' && MLTV_OTA.source() === 'builtin'), 'baseline boots v0.1.11 from builtin .wgt');
+  ok(await pg.evaluate(() => MLTV_OTA.version() === '0.1.28' && MLTV_OTA.source() === 'builtin'), 'baseline boots v0.1.11 from builtin .wgt');
   ok(await pg.evaluate(async () => (await MLTV_OTA.sha256Hex('mojaloss-tv-ota')) === MLTV_OTA.sha256Pure('mojaloss-tv-ota')), 'pure-JS SHA-256 matches WebCrypto SHA-256');
   // Navigate with remote D-pad Up -> Hero buttons -> Up -> Top bar #update-btn and press OK
   await key(U);
@@ -684,7 +684,7 @@ const api = async q => (await fetch(M + q)).json();
   // Valid v0.1.11 bundle: check, show banner + modal screenshot, install, reload into v0.1.11
   await api('/__state?ota=v019');
   await pg.evaluate(() => MLTV_OTA.checkForUpdates(true)); await sleep(600);
-  ok(await pg.$eval('#ota-banner', e => e.style.display !== 'none' && /Update available \(v0\.1\.28\)/.test(e.textContent)), 'Home banner shows Update available (v0.1.11)');
+  ok(await pg.$eval('#ota-banner', e => e.style.display !== 'none' && /Update available \(v0\.1\.29\)/.test(e.textContent)), 'Home banner shows Update available (v0.1.11)');
   await pg.evaluate(() => MLTV.openUpdateModal()); await sleep(300);
   await pg.screenshot({ path: OUT + 'tv-update.png' });
   await Promise.all([
@@ -692,8 +692,8 @@ const api = async q => (await fetch(M + q)).json();
     key(OK) // Click #ota-install-now -> downloads, verifies SHA-256, saves to storage, reloads
   ]);
   await sleep(1500);
-  ok(await pg.evaluate(() => MLTV_OTA.version() === '0.1.28' && MLTV_OTA.versionCode() === 28 && MLTV_OTA.source() === 'ota'), 'reloaded into verified OTA v0.1.11 bundle');
-  ok(await pg.$eval('#ver-badge', e => e.textContent) === 'v0.1.28', 'Home header badge shows v0.1.11 after OTA update');
+  ok(await pg.evaluate(() => MLTV_OTA.version() === '0.1.29' && MLTV_OTA.versionCode() === 29 && MLTV_OTA.source() === 'ota'), 'reloaded into verified OTA v0.1.11 bundle');
+  ok(await pg.$eval('#ver-badge', e => e.textContent) === 'v0.1.29', 'Home header badge shows v0.1.11 after OTA update');
 
   // Faulty/crashing OTA bundle: bootloader catches boot throw and automatically rolls back to baked-in 0.1.10
   await api('/__state?ota=crash');
@@ -702,7 +702,7 @@ const api = async q => (await fetch(M + q)).json();
   await api('/__state?ota=none');
   await pg.goto(BASE); await sleep(1500);
   const rb = await pg.evaluate(() => ({ ver: MLTV_OTA.version(), src: MLTV_OTA.source(), rolledBackFrom: MLTV_OTA.state().rolledBackFrom, err: MLTV_OTA.state().lastRollbackError, cached: localStorage.getItem('mltv_ota_bundle') }));
-  ok(rb.ver === '0.1.27' && rb.src === 'builtin' && rb.rolledBackFrom === '0.1.28' && !rb.cached, 'crashing OTA bundle automatically rolls back to baked-in v0.1.11 (' + rb.err + ')');
+  ok(rb.ver === '0.1.28' && rb.src === 'builtin' && rb.rolledBackFrom === '0.1.29' && !rb.cached, 'crashing OTA bundle automatically rolls back to baked-in v0.1.11 (' + rb.err + ')');
 
   ok(errs.length === 0, 'no page errors ' + errs.join(' | '));
   console.log(`\n${pass} passed, ${fail} failed`); process.exitCode = fail ? 1 : 0;
