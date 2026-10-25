@@ -73,6 +73,8 @@ var Focus = (function () {
     if (!e) return;
     if (cur && cur !== e) cur.classList.remove('focused');
     cur = e; e.classList.add('focused');
+    var verList = e.closest && e.closest('.ver-list');
+    if (verList && e.scrollIntoView) { try { e.scrollIntoView(false); } catch (err) {} }
 
     var parentRow = e.closest('section.row') || e.closest('.row');
     if (parentRow) parentRow._lastFocused = e;

@@ -4,8 +4,8 @@
       rolls back automatically to the baked-in .wgt files so a bad update can never brick the TV.
    3. Provides window.MLTV_OTA for checking, downloading, SHA-256 verifying, and applying updates. */
 (function () {
-  var BUILTIN_VERSION = '0.1.29';
-  var BUILTIN_VERSION_CODE = 29;
+  var BUILTIN_VERSION = '0.1.32';
+  var BUILTIN_VERSION_CODE = 32;
   var STORAGE_KEY = 'mltv_ota_bundle';
   var DB_NAME = 'mltv_ota_db';
   var STORE_NAME = 'bundles';
@@ -186,6 +186,107 @@
     } catch (e3) {}
   }
 
+  var PIN_KEY = 'mltv_version_pin';
+  var HISTORY_KEY = 'mltv_version_history';
+  var RELEASES_URL = mock ? (mock + '/ota/releases') : 'https://api.github.com/repos/junior-rahman/Mojaloss/releases?per_page=20';
+
+  function readPin() {
+    try {
+      var raw = localStorage.getItem(PIN_KEY);
+      if (!raw) return null;
+      var p = JSON.parse(raw);
+      if (!p || typeof p.versionCode !== 'number') return null;
+      return { version: String(p.version || ''), versionCode: p.versionCode };
+    } catch (e) { return null; }
+  }
+  function writePin(info) {
+    try {
+      if (!info) localStorage.removeItem(PIN_KEY);
+      else localStorage.setItem(PIN_KEY, JSON.stringify({ version: info.version, versionCode: info.versionCode }));
+    } catch (e) {}
+    state.pin = readPin();
+  }
+  function readHistoryIndex() {
+    try {
+      var raw = localStorage.getItem(HISTORY_KEY);
+      var list = raw ? JSON.parse(raw) : [];
+      return Array.isArray(list) ? list : [];
+    } catch (e) { return []; }
+  }
+  function writeHistoryIndex(list) {
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, 6))); } catch (e) {}
+  }
+  function idbGet(key) {
+    return new Promise(function (resolve) {
+      try {
+        if (!window.indexedDB) return resolve(null);
+        var req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = function () {
+          if (!req.result.objectStoreNames.contains(STORE_NAME)) req.result.createObjectStore(STORE_NAME);
+        };
+        req.onerror = function () { resolve(null); };
+        req.onsuccess = function () {
+          try {
+            var db = req.result, tx = db.transaction(STORE_NAME, 'readonly');
+            var g = tx.objectStore(STORE_NAME).get(key);
+            g.onsuccess = function () { db.close(); resolve(g.result || null); };
+            g.onerror = function () { db.close(); resolve(null); };
+          } catch (e) { resolve(null); }
+        };
+      } catch (e2) { resolve(null); }
+    });
+  }
+  function archiveBundle(b) {
+    if (!b || typeof b.versionCode !== 'number' || typeof b.js !== 'string' || !b.js) return Promise.resolve(false);
+    var slim = { version: b.version, versionCode: b.versionCode, notes: b.notes || '', releasedAt: b.releasedAt || '', sha256: b.sha256 || '' };
+    var list = readHistoryIndex().filter(function (x) { return x.versionCode !== b.versionCode; });
+    list.unshift(slim);
+    writeHistoryIndex(list);
+    return new Promise(function (resolve) {
+      try {
+        if (!window.indexedDB) return resolve(false);
+        var req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = function () {
+          if (!req.result.objectStoreNames.contains(STORE_NAME)) req.result.createObjectStore(STORE_NAME);
+        };
+        req.onerror = function () { resolve(false); };
+        req.onsuccess = function () {
+          try {
+            var db = req.result, tx = db.transaction(STORE_NAME, 'readwrite');
+            tx.objectStore(STORE_NAME).put(b, 'hist:' + b.versionCode);
+            tx.oncomplete = function () { db.close(); resolve(true); };
+            tx.onerror = function () { db.close(); resolve(false); };
+          } catch (e) { resolve(false); }
+        };
+      } catch (e2) { resolve(false); }
+    });
+  }
+  function parseReleaseList(data) {
+    var arr = Array.isArray(data) ? data : [];
+    var out = [];
+    for (var i = 0; i < arr.length; i++) {
+      var r = arr[i] || {};
+      if (typeof r.versionCode === 'number' && r.version) {
+        out.push({ version: String(r.version), versionCode: r.versionCode, notes: r.notes || '', releasedAt: r.releasedAt || '', bundleUrl: r.bundleUrl || '', source: 'release' });
+        continue;
+      }
+      var tag = String(r.tag_name || '');
+      var tm = /^tv-v(\d+)\.(\d+)\.(\d+)$/.exec(tag);
+      if (!tm) continue;
+      var bundleUrl = '';
+      var assets = r.assets || [];
+      for (var a = 0; a < assets.length; a++) {
+        if (assets[a] && assets[a].name === 'tv-ota-bundle.json') bundleUrl = assets[a].browser_download_url || '';
+      }
+      if (!bundleUrl) continue;
+      var notes = String(r.body || '').split('\n')[0].slice(0, 140);
+      var versionCode = (tm[1] === '0' && tm[2] === '1') ? +tm[3] : ((+tm[1]) * 10000 + (+tm[2]) * 100 + (+tm[3]));
+      out.push({ version: tm[1] + '.' + tm[2] + '.' + tm[3], versionCode: versionCode, notes: notes, releasedAt: r.published_at || '', bundleUrl: bundleUrl, source: 'release' });
+    }
+    return out;
+  }
+  function reloadSoon() { setTimeout(function () { location.reload(); }, 150); }
+
   function fetchJson(url) {
     var u = (url.indexOf('raw.githubusercontent.com') >= 0) ? (url + (url.indexOf('?') >= 0 ? '&' : '?') + '_t=' + Date.now()) : url;
     return Promise.race([
@@ -223,6 +324,7 @@
     checking: false,
     updating: false,
     lastCheckError: null,
+    pin: null,
     listeners: []
   };
 
@@ -341,7 +443,9 @@
         return { hasUpdate: false, error: state.lastCheckError };
       });
     },
-    installUpdate: function (bundleOrNull) {
+    installUpdate: function (bundleOrNull, opt) {
+      opt = opt || {};
+      var pinAfter = Object.prototype.hasOwnProperty.call(opt, 'pin') ? opt.pin : undefined;
       state.updating = true;
       state.lastCheckError = null;
       notify();
@@ -356,10 +460,12 @@
       }).then(function (verified) {
         return writeBundleStorage(verified);
       }).then(function (saved) {
+        if (pinAfter === null) writePin(null);
+        else if (pinAfter && typeof pinAfter.versionCode === 'number') writePin(pinAfter);
         state.updating = false;
         state.availableUpdate = null;
         notify();
-        setTimeout(function () { location.reload(); }, 150);
+        reloadSoon();
         return saved;
       }, function (err) {
         state.updating = false;
@@ -371,12 +477,77 @@
     resetToBuiltin: function () {
       clearBundleStorage();
       location.reload();
+    },
+    pinned: function () { return state.pin; },
+    archiveBundle: archiveBundle,
+    listVersions: function () {
+      var map = {};
+      function add(v) {
+        if (!v || typeof v.versionCode !== 'number') return;
+        var prev = map[v.versionCode];
+        if (!prev) {
+          map[v.versionCode] = { version: String(v.version || ''), versionCode: v.versionCode, notes: v.notes || '', releasedAt: v.releasedAt || '', bundleUrl: v.bundleUrl || '', builtin: !!v.builtin, source: v.source || '' };
+          return;
+        }
+        if (v.builtin) prev.builtin = true;
+        if (v.notes && !prev.notes) prev.notes = v.notes;
+        if (v.bundleUrl) prev.bundleUrl = v.bundleUrl;
+      }
+      add({ version: BUILTIN_VERSION, versionCode: BUILTIN_VERSION_CODE, notes: 'Copy saved on this TV', builtin: true, source: 'builtin' });
+      var hist = readHistoryIndex();
+      for (var i = 0; i < hist.length; i++) add(hist[i]);
+      return fetchJson(RELEASES_URL).then(function (data) {
+        return parseReleaseList(data);
+      }, function () { return []; }).then(function (remote) {
+        for (var r = 0; r < remote.length; r++) add(remote[r]);
+        var list = [];
+        for (var k in map) if (Object.prototype.hasOwnProperty.call(map, k)) list.push(map[k]);
+        list.sort(function (a, b) { return b.versionCode - a.versionCode; });
+        if (list.length) list[0].latest = true;
+        for (var n = 0; n < list.length; n++) list[n].current = list[n].versionCode === state.activeVersionCode;
+        return list;
+      });
+    },
+    useVersion: function (entry) {
+      if (!entry || typeof entry.versionCode !== 'number') return Promise.reject(new Error('Unknown version'));
+      var asLatest = !!entry.latest;
+      if (entry.versionCode === state.activeVersionCode) {
+        if (asLatest) { writePin(null); notify(); }
+        return Promise.resolve({ already: true, version: state.activeVersion });
+      }
+      if (entry.versionCode === BUILTIN_VERSION_CODE) {
+        writePin(asLatest ? null : { version: BUILTIN_VERSION, versionCode: BUILTIN_VERSION_CODE });
+        clearBundleStorage();
+        reloadSoon();
+        return Promise.resolve({ version: BUILTIN_VERSION });
+      }
+      var pin = asLatest ? null : { version: entry.version, versionCode: entry.versionCode };
+      var opt = { pin: pin };
+      return idbGet('hist:' + entry.versionCode).then(function (saved) {
+        if (saved && saved.js && saved.css && saved.sha256) return window.MLTV_OTA.installUpdate(saved, opt);
+        if (!entry.bundleUrl) throw new Error('No package for v' + entry.version);
+        return window.MLTV_OTA.installUpdate({ version: entry.version, versionCode: entry.versionCode, bundleUrl: entry.bundleUrl }, opt);
+      });
+    },
+    useLatest: function () {
+      return window.MLTV_OTA.listVersions().then(function (list) {
+        var latest = null;
+        for (var i = 0; i < list.length; i++) {
+          if (!latest || list[i].versionCode > latest.versionCode) latest = list[i];
+        }
+        if (!latest) { writePin(null); notify(); return { already: true, version: state.activeVersion }; }
+        latest.latest = true;
+        return window.MLTV_OTA.useVersion(latest);
+      });
     }
   };
 
-  /* Boot sequence: check if a newer verified OTA bundle is cached */
+  /* Boot sequence: latest by default. A pin loads that version even when it is older than the built-in copy. */
   var cached = readLocalBundle();
-  if (cached && typeof cached.versionCode === 'number' && cached.versionCode > BUILTIN_VERSION_CODE) {
+  var pin = readPin();
+  state.pin = pin;
+  var pinMatch = !!(pin && cached && cached.versionCode === pin.versionCode);
+  if (cached && typeof cached.versionCode === 'number' && (pinMatch || (!pin && cached.versionCode > BUILTIN_VERSION_CODE))) {
     bootFromOta(cached);
   } else {
     loadBuiltinScripts();

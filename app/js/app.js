@@ -695,7 +695,7 @@
       }
     };
   }
-  function curVer() { return (window.MLTV_OTA && MLTV_OTA.version()) || '0.1.31'; }
+  function curVer() { return (window.MLTV_OTA && MLTV_OTA.version()) || '0.1.32'; }
   function topbar(extra) { return '<div class="top"><div class="brand"><i></i>MojaLoss <span class="ver-badge" id="ver-badge">v' + h(curVer()) + '</span></div><div class="actions">' + (extra || '') + '</div></div>'; }
 
   /* In-app OTA Update modal, quota-safe storage & automatic OTA updates */
@@ -735,6 +735,7 @@
   function maybeTriggerAutoUpdate(res) {
     if (!res || !res.hasUpdate || !res.remote || !window.MLTV_OTA) return;
     if (!isAutoUpdateOn()) return;
+    if (window.MLTV_OTA && MLTV_OTA.pinned && MLTV_OTA.pinned()) return;
     var isTestEnv = !!(param("mock") || param("ota"));
     if (isTestEnv && !window.__mltvForceAutoUpdate) return;
     var targetVer = res.remote.version || String(res.remote.versionCode || "");
@@ -772,26 +773,30 @@
       m = document.createElement("div");
       m.id = "update-modal";
       m.className = "modal-backdrop";
-      document.body.appendChild(m);
+      (document.getElementById("root") || document.body).appendChild(m);
     }
-    var st = window.MLTV_OTA ? MLTV_OTA.state() : { activeVersion: "0.1.31", activeSource: "builtin", builtinVersion: "0.1.31" };
+    var st = window.MLTV_OTA ? MLTV_OTA.state() : { activeVersion: "0.1.32", activeSource: "builtin", builtinVersion: "0.1.32", pin: null };
     var avail = st.availableUpdate;
     var autoOn = isAutoUpdateOn();
+    var pin = st.pin;
     var statusHtml = st.updating ? "Downloading & installing update package…" :
       st.checking ? "Checking GitHub for updates…" :
       st.lastCheckError ? ("Update check error: " + h(st.lastCheckError)) :
+      pin ? ("Staying on v" + h(pin.version) + ". Default to the latest version whenever you want.") :
       avail ? ("New update available: v" + h(avail.version) + (avail.notes ? " — " + h(avail.notes) : "")) :
-      "Your TV app is up to date (Auto-Update " + (autoOn ? "ON" : "OFF") + ").";
+      "Your TV app is up to date. Default: latest version.";
     m.innerHTML = "<div class=\"modal-card glass\">" +
       "<div class=\"brand\"><i></i>MojaLoss TV Update</div>" +
       "<h1 style=\"margin-top:22px;font-size:44px\">App Version v" + h(st.activeVersion) + "</h1>" +
-      "<div class=\"meta\" style=\"margin-top:14px\"><span>Source: " + h(st.activeSource === "ota" ? "OTA Bundle" : "Built-in WGT") + "</span><span>Baseline: v" + h(st.builtinVersion) + "</span><span>Auto-Update: " + (autoOn ? "ON" : "OFF") + "</span></div>" +
+      "<div class=\"meta\" style=\"margin-top:14px\"><span>Source: " + h(st.activeSource === "ota" ? "OTA Bundle" : "Built-in WGT") + "</span><span>Baseline: v" + h(st.builtinVersion) + "</span><span>" + (pin ? ("Pinned to v" + h(pin.version)) : "Default: latest version") + "</span><span>Auto-Update: " + (autoOn ? "ON" : "OFF") + "</span></div>" +
       "<p class=\"ota-status\" id=\"ota-modal-status\">" + statusHtml + "</p>" +
-      "<div class=\"actions\" style=\"margin-top:32px\">" +
-      (avail ? "<div class=\"btn primary focusable\" id=\"ota-install-now\">Install v" + h(avail.version) + " now</div>" : "") +
-      "<div class=\"btn " + (avail ? "" : "primary ") + "focusable\" id=\"ota-check-now\">Check for updates</div>" +
+      "<div class=\"ver-head\">Previous versions</div>" +
+      "<div class=\"ver-list\" id=\"ota-version-list\"><p class=\"ota-status\">Loading versions…</p></div>" +
+      "<div class=\"actions\" style=\"margin-top:22px\">" +
+      (avail && !pin ? "<div class=\"btn primary focusable\" id=\"ota-install-now\">Install v" + h(avail.version) + " now</div>" : "") +
+      "<div class=\"btn primary focusable\" id=\"ota-use-latest\">Default to latest version</div>" +
+      "<div class=\"btn focusable\" id=\"ota-check-now\">Check for updates</div>" +
       "<div class=\"btn focusable\" id=\"ota-auto-toggle\">Auto-Update: " + (autoOn ? "ON" : "OFF") + "</div>" +
-      (st.activeSource === "ota" ? "<div class=\"btn focusable\" id=\"ota-reset-builtin\">Restore built-in v" + h(st.builtinVersion) + "</div>" : "") +
       "<div class=\"btn focusable\" id=\"ota-modal-close\">Close</div>" +
       "</div></div>";
     var instBtn = document.getElementById("ota-install-now");
@@ -831,8 +836,65 @@
     };
     var rstBtn = document.getElementById("ota-reset-builtin");
     if (rstBtn) rstBtn.onclick = function () { MLTV_OTA.resetToBuiltin(); };
+    document.getElementById("ota-use-latest").onclick = function () {
+      var sEl = document.getElementById("ota-modal-status");
+      if (sEl) sEl.textContent = "Using the latest version…";
+      MLTV_OTA.useLatest().then(function (res) {
+        if (res && res.already) {
+          if (sEl) sEl.textContent = "Already on the latest version (v" + curVer() + ").";
+          toast("Already on the latest version");
+          if (document.getElementById("update-modal")) openUpdateModal();
+        }
+      }, function (err) {
+        if (sEl) sEl.textContent = "Could not switch: " + (err && err.message ? err.message : "error");
+        toast("Could not switch versions");
+      });
+    };
+    if (window.MLTV_OTA && MLTV_OTA.listVersions) {
+      MLTV_OTA.listVersions().then(function (list) {
+        var box = document.getElementById("ota-version-list");
+        if (!box) return;
+        if (!list || !list.length) { box.innerHTML = "<p class=\"ota-status\">No previous versions found.</p>"; return; }
+        var html = "";
+        for (var i = 0; i < list.length; i++) {
+          var v = list[i];
+          var tags = [];
+          if (v.latest) tags.push("Latest");
+          if (v.builtin) tags.push("Built-in");
+          if (v.current) tags.push("In use");
+          var sub = tags.length ? tags.join(" · ") : (v.notes || "Previous version");
+          var btn = v.current
+            ? "<div class=\"ver-now\">In use</div>"
+            : v.blocked
+              ? "<div class=\"ver-now\">Too old for this TV</div>"
+              : "<div class=\"btn focusable ver-use\" data-code=\"" + v.versionCode + "\">Use this version</div>";
+          html += "<div class=\"ver-row" + (v.current ? " is-current" : "") + "\"><div class=\"ver-meta\"><b>v" + h(v.version) + "</b><span>" + h(sub) + "</span></div>" + btn + "</div>";
+        }
+        box.innerHTML = html;
+        var buttons = box.querySelectorAll(".ver-use");
+        for (var b = 0; b < buttons.length; b++) {
+          buttons[b].onclick = function () {
+            var code = +this.getAttribute("data-code");
+            var entry = null;
+            for (var k = 0; k < list.length; k++) if (list[k].versionCode === code) entry = list[k];
+            if (!entry) return;
+            var sEl = document.getElementById("ota-modal-status");
+            if (sEl) sEl.textContent = "Switching to v" + entry.version + "…";
+            MLTV_OTA.useVersion(entry).then(function (res) {
+              if (res && res.already) toast("Already on v" + entry.version);
+            }, function (err) {
+              if (sEl) sEl.textContent = (err && err.message) ? err.message : "Could not switch versions";
+              toast((err && err.message) ? err.message : "Could not switch versions");
+            });
+          };
+        }
+      }, function () {
+        var box = document.getElementById("ota-version-list");
+        if (box) box.innerHTML = "<p class=\"ota-status\">Couldn't load previous versions.</p>";
+      });
+    }
     document.getElementById("ota-modal-close").onclick = closeUpdateModal;
-    Focus.first(avail ? "#ota-install-now" : "#ota-check-now");
+    Focus.first("#ota-use-latest");
     if (!avail && !st.checking && !st.updating && !param("mock") && !param("ota")) {
       MLTV_OTA.checkForUpdates(true).then(function (res) {
         if (document.getElementById("update-modal")) openUpdateModal();
@@ -847,7 +909,15 @@
       if (st.availableUpdate || st.updating) u.classList.add("has-update"); else u.classList.remove("has-update");
     }
     if (b) {
-      if (st.availableUpdate) {
+      if (st.availableUpdate && st.pin) {
+        b.style.display = "flex";
+        b.innerHTML = "<span><b>Latest is v" + h(st.availableUpdate.version) + "</b> — staying on v" + h(st.pin.version) + "</span><span class=\"pill on\">OK defaults to latest</span>";
+        b.classList.add("focusable");
+        b.onclick = function () {
+          toast("Switching to the latest version…");
+          MLTV_OTA.useLatest().catch(function (err) { toast("Could not switch: " + (err && err.message ? err.message : "error")); });
+        };
+      } else if (st.availableUpdate) {
         b.style.display = "flex";
         b.innerHTML = "<span><b>Update available (v" + h(st.availableUpdate.version) + ")</b>" + (st.availableUpdate.notes ? " — " + h(st.availableUpdate.notes) : "") + "</span><span class=\"pill on\">Press OK to update now</span>";
         b.classList.add("focusable");
@@ -862,6 +932,130 @@
     }
   }
   if (window.MLTV_OTA) {
+    var supportsOlderBoot = typeof MLTV_OTA.pinned === "function";
+    function readVersionPin() {
+      try {
+        var raw = localStorage.getItem("mltv_version_pin");
+        if (!raw) return null;
+        var p = JSON.parse(raw);
+        if (!p || typeof p.versionCode !== "number") return null;
+        return { version: String(p.version || ""), versionCode: p.versionCode };
+      } catch (e) { return null; }
+    }
+    function writeVersionPin(info) {
+      try {
+        if (!info) localStorage.removeItem("mltv_version_pin");
+        else localStorage.setItem("mltv_version_pin", JSON.stringify({ version: info.version, versionCode: info.versionCode }));
+      } catch (e) {}
+      try { MLTV_OTA.state().pin = readVersionPin(); } catch (e2) {}
+    }
+    function versionCodeFromName(version) {
+      var tm = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(version || ""));
+      if (!tm) return null;
+      return (+tm[1]) * 10000 + ((+tm[2]) - 1) * 100 + (+tm[3]);
+    }
+    function parseReleaseList(data) {
+      var arr = Array.isArray(data) ? data : [];
+      var out = [];
+      for (var i = 0; i < arr.length; i++) {
+        var r = arr[i] || {};
+        if (typeof r.versionCode === "number" && r.version) {
+          out.push({ version: String(r.version), versionCode: r.versionCode, notes: r.notes || "", bundleUrl: r.bundleUrl || "" });
+          continue;
+        }
+        var tm = /^tv-v(\d+\.\d+\.\d+)$/.exec(String(r.tag_name || ""));
+        if (!tm) continue;
+        var code = versionCodeFromName(tm[1]);
+        if (code == null) continue;
+        var bundleUrl = "";
+        var assets = r.assets || [];
+        for (var a = 0; a < assets.length; a++) {
+          if (!assets[a]) continue;
+          if (assets[a].name === "tv-manifest.json") bundleUrl = assets[a].browser_download_url || bundleUrl;
+          if (assets[a].name === "tv-ota-bundle.json") { bundleUrl = assets[a].browser_download_url || ""; break; }
+        }
+        if (!bundleUrl) continue;
+        out.push({ version: tm[1], versionCode: code, notes: String(r.name || r.body || "").split("\n")[0].slice(0, 120), bundleUrl: bundleUrl });
+      }
+      return out;
+    }
+    function releasesUrl() {
+      var mock = param("mock");
+      if (mock) return mock.replace(/\/$/, "") + "/ota/releases";
+      return "https://api.github.com/repos/junior-rahman/Mojaloss/releases?per_page=30";
+    }
+    function applyVersionChoice(entry, asLatest) {
+      if (asLatest) { writeVersionPin(null); setAutoUpdateOn(true); }
+      else { writeVersionPin({ version: entry.version, versionCode: entry.versionCode }); setAutoUpdateOn(false); }
+    }
+    try { MLTV_OTA.state().pin = readVersionPin(); } catch (e) {}
+    MLTV_OTA.pinned = function () { return readVersionPin(); };
+    MLTV_OTA.listVersions = function () {
+      var st = MLTV_OTA.state();
+      var map = {};
+      function add(v) {
+        if (!v || typeof v.versionCode !== "number") return;
+        var prev = map[v.versionCode];
+        if (!prev) {
+          map[v.versionCode] = { version: String(v.version || ""), versionCode: v.versionCode, notes: v.notes || "", bundleUrl: v.bundleUrl || "", builtin: !!v.builtin };
+          return;
+        }
+        if (v.builtin) prev.builtin = true;
+        if (v.notes && !prev.notes) prev.notes = v.notes;
+        if (v.bundleUrl && !prev.bundleUrl) prev.bundleUrl = v.bundleUrl;
+      }
+      add({ version: st.builtinVersion, versionCode: st.builtinVersionCode, notes: "Copy saved on this TV", builtin: true });
+      return fetch(releasesUrl(), { cache: "no-store" }).then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      }).then(parseReleaseList, function () { return []; }).then(function (remote) {
+        for (var i = 0; i < remote.length; i++) add(remote[i]);
+        var list = [];
+        for (var k in map) if (Object.prototype.hasOwnProperty.call(map, k)) list.push(map[k]);
+        list.sort(function (a, b) { return b.versionCode - a.versionCode; });
+        if (list.length) list[0].latest = true;
+        for (var n = 0; n < list.length; n++) {
+          list[n].current = list[n].versionCode === st.activeVersionCode;
+          list[n].blocked = list[n].versionCode < st.builtinVersionCode && !supportsOlderBoot;
+        }
+        return list;
+      });
+    };
+    MLTV_OTA.useVersion = function (entry) {
+      if (!entry || typeof entry.versionCode !== "number") return Promise.reject(new Error("Unknown version"));
+      var st = MLTV_OTA.state();
+      var asLatest = !!entry.latest;
+      if (entry.blocked || (entry.versionCode < st.builtinVersionCode && !supportsOlderBoot)) {
+        return Promise.reject(new Error("This TV can only go back as far as v" + st.builtinVersion + "."));
+      }
+      if (entry.versionCode === st.activeVersionCode) {
+        if (asLatest) applyVersionChoice(entry, true);
+        return Promise.resolve({ already: true, version: st.activeVersion });
+      }
+      if (entry.versionCode === st.builtinVersionCode) {
+        applyVersionChoice({ version: st.builtinVersion, versionCode: st.builtinVersionCode }, asLatest);
+        MLTV_OTA.resetToBuiltin();
+        return Promise.resolve({ version: st.builtinVersion });
+      }
+      if (!entry.bundleUrl) return Promise.reject(new Error("No package for v" + entry.version));
+      return fetch(entry.bundleUrl, { cache: "no-store" }).then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      }).then(function (bundle) {
+        return MLTV_OTA.verifyBundle ? MLTV_OTA.verifyBundle(bundle) : bundle;
+      }).then(function (verified) {
+        applyVersionChoice(entry, asLatest);
+        return MLTV_OTA.installUpdate(verified, asLatest ? { pin: null } : { pin: { version: entry.version, versionCode: entry.versionCode } });
+      });
+    };
+    MLTV_OTA.useLatest = function () {
+      return MLTV_OTA.listVersions().then(function (list) {
+        var latest = null;
+        for (var i = 0; i < list.length; i++) if (!latest || list[i].versionCode > latest.versionCode) latest = list[i];
+        if (!latest) return { already: true, version: MLTV_OTA.version() };
+        return MLTV_OTA.useVersion({ version: latest.version, versionCode: latest.versionCode, notes: latest.notes, bundleUrl: latest.bundleUrl, builtin: latest.builtin, latest: true });
+      });
+    };
     MLTV_OTA.isAutoUpdateEnabled = isAutoUpdateOn;
     MLTV_OTA.setAutoUpdateEnabled = setAutoUpdateOn;
     MLTV_OTA.triggerAutoUpdate = function () {
@@ -874,12 +1068,20 @@
       }
     };
     var origInstall = MLTV_OTA.installUpdate;
-    MLTV_OTA.installUpdate = function (bundleOrNull) {
+    MLTV_OTA.installUpdate = function (bundleOrNull, opt) {
       evictHeavyStorage(true);
-      try { localStorage.removeItem("mltv_ota_bundle"); } catch (e) {}
+      var prevRaw = null;
+      try { prevRaw = localStorage.getItem("mltv_ota_bundle"); } catch (e) {}
+      var arch = Promise.resolve();
+      if (prevRaw && MLTV_OTA.archiveBundle) {
+        try { arch = MLTV_OTA.archiveBundle(JSON.parse(prevRaw)) || Promise.resolve(); } catch (e3) {}
+      }
+      try { localStorage.removeItem("mltv_ota_bundle"); } catch (e4) {}
       var st = MLTV_OTA.state();
       var candidate = bundleOrNull || (st && st.availableUpdate) || null;
-      return origInstall.call(MLTV_OTA, candidate).then(function (verified) {
+      return arch.then(function () {
+        return origInstall.call(MLTV_OTA, candidate, opt);
+      }).then(function (verified) {
         try {
           var checkRaw = localStorage.getItem("mltv_ota_bundle");
           var checkObj = checkRaw ? JSON.parse(checkRaw) : null;

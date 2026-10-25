@@ -4,7 +4,7 @@ var Api = (function () {
   var JF = mock ? mock + '/jelly' : 'https://www.mojaloss.stream/jelly';
   var WP = mock ? mock + '/wp-json/wp/v2/' : 'https://www.mojaloss.stream/wp-json/wp/v2/';
   var NS = mock ? 'mltest.' : 'ml.';
-  var VERSION = '0.1.29';
+  var VERSION = '0.1.31';
   var PLATFORM_SLUGS = ['netflix','prime','apple','disney','hbo','hulu','paramount','peacock','hotstar','zee5','sonyliv','altbalaji','mxplayer','voot','hoichoi','cruncyroll','crunchyroll','showtime','imdb'];
 
   function get(k) { try { return localStorage.getItem(NS + k); } catch (e) { return null; } }
