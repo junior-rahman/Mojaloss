@@ -695,7 +695,7 @@
       }
     };
   }
-  function curVer() { return (window.MLTV_OTA && MLTV_OTA.version()) || '0.1.33'; }
+  function curVer() { return (window.MLTV_OTA && MLTV_OTA.version()) || '0.1.34'; }
   function topbar(extra) { return '<div class="top"><div class="brand"><i></i>MojaLoss <span class="ver-badge" id="ver-badge">v' + h(curVer()) + '</span></div><div class="actions">' + (extra || '') + '</div></div>'; }
 
   /* In-app OTA Update modal, quota-safe storage & automatic OTA updates */
@@ -767,6 +767,9 @@
     else Focus.first(".focusable");
   }
   function openUpdateModal() {
+    if (typeof stopBgPreview === "function") stopBgPreview(true);
+    var existing = document.getElementById("update-modal");
+    if (existing) return;
     preModalFocus = Focus.current();
     var m = document.getElementById("update-modal");
     if (!m) {
@@ -775,7 +778,7 @@
       m.className = "modal-backdrop";
       (document.getElementById("root") || document.body).appendChild(m);
     }
-    var st = window.MLTV_OTA ? MLTV_OTA.state() : { activeVersion: "0.1.33", activeSource: "builtin", builtinVersion: "0.1.33", pin: null };
+    var st = window.MLTV_OTA ? MLTV_OTA.state() : { activeVersion: "0.1.34", activeSource: "builtin", builtinVersion: "0.1.34", pin: null };
     var avail = st.availableUpdate;
     var autoOn = isAutoUpdateOn();
     var pin = st.pin;
@@ -813,9 +816,14 @@
     };
     document.getElementById("ota-check-now").onclick = function () {
       var sEl = document.getElementById("ota-modal-status");
-      if (sEl) sEl.textContent = "Checking GitHub for updates…";
+      if (sEl) sEl.textContent = "Checking for updates…";
       MLTV_OTA.checkForUpdates(true).then(function (res) {
-        if (document.getElementById("update-modal")) openUpdateModal();
+        var st2 = MLTV_OTA.state();
+        if (sEl && document.getElementById("update-modal")) {
+          sEl.textContent = st2.availableUpdate
+            ? ("New update available: v" + st2.availableUpdate.version)
+            : (res && res.error ? ("Update check error: " + res.error) : ("Your TV app is up to date. Default: latest version."));
+        }
         if (res && res.hasUpdate) {
           toast("Update v" + res.remote.version + " is ready");
           maybeTriggerAutoUpdate(res);
@@ -829,9 +837,7 @@
       var next = !isAutoUpdateOn();
       setAutoUpdateOn(next);
       toast("Auto-Update " + (next ? "enabled" : "disabled"));
-      if (document.getElementById("update-modal")) openUpdateModal();
-      var tBtn = document.getElementById("ota-auto-toggle");
-      if (tBtn) Focus.set(tBtn);
+      if (autoBtn) autoBtn.textContent = "Auto-Update: " + (next ? "ON" : "OFF");
       if (next && st.availableUpdate) maybeTriggerAutoUpdate({ hasUpdate: true, remote: st.availableUpdate });
     };
     var rstBtn = document.getElementById("ota-reset-builtin");
@@ -843,7 +849,6 @@
         if (res && res.already) {
           if (sEl) sEl.textContent = "Already on the latest version (v" + curVer() + ").";
           toast("Already on the latest version");
-          if (document.getElementById("update-modal")) openUpdateModal();
         }
       }, function (err) {
         if (sEl) sEl.textContent = "Could not switch: " + (err && err.message ? err.message : "error");
@@ -894,11 +899,9 @@
       });
     }
     document.getElementById("ota-modal-close").onclick = closeUpdateModal;
-    Focus.first("#ota-use-latest");
-    if (!avail && !st.checking && !st.updating && !param("mock") && !param("ota")) {
-      MLTV_OTA.checkForUpdates(true).then(function (res) {
-        if (document.getElementById("update-modal")) openUpdateModal();
-      });
+    if (!document.getElementById("update-modal").getAttribute("data-focused")) {
+      document.getElementById("update-modal").setAttribute("data-focused", "1");
+      Focus.first("#ota-use-latest");
     }
   }
   function refreshUpdateUi() {
@@ -1111,14 +1114,7 @@
         });
       }
       st.checking = true; st.lastCheckError = null; refreshUpdateUi();
-      var commitApi = "https://api.github.com/repos/junior-rahman/Mojaloss/commits/tv-ota?_t=" + Date.now();
-      return fetch(commitApi, { cache: "no-store" }).then(function (r) {
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        return r.json();
-      }).then(function (c) {
-        var ref = (c && c.sha) ? c.sha : "tv-ota";
-        return fetch("https://raw.githubusercontent.com/junior-rahman/Mojaloss/" + ref + "/tv-manifest.json?_t=" + Date.now(), { cache: "no-store" });
-      }).then(function (r) {
+      return fetch("https://raw.githubusercontent.com/junior-rahman/Mojaloss/tv-ota/tv-manifest.json?_t=" + Date.now(), { cache: "no-store" }).then(function (r) {
         if (!r.ok) throw new Error("HTTP " + r.status);
         return r.json();
       }).then(function (remote) {
