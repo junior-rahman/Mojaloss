@@ -27,29 +27,90 @@
 
   function h(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); }
   function toast(t) { var e = document.getElementById('toast'); e.textContent = t; e.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(function () { e.classList.remove('show'); }, 3500); }
-  var bdCurUrl = '', bdTimer = null;
-  var bgTrailerTimer = null, bgTrailerStopTimer = null, bgTrailerItem = null, bgTrailerSeq = 0;
+  var bdCurUrl = '', bdTimer = null, bdLayerIdx = 0;
+  var bgTrailerTimer = null, bgTrailerStopTimer = null, bgTrailerUnloadTimer = null, bgTrailerVolTimer = null, bgTrailerItem = null, bgTrailerSeq = 0;
+  var activeSpotlightTrack = null, spotlightRestoreTimer = null;
   function ensureBdLayers() {
     if (!bd.querySelector('.bd-layer')) {
-      bd.innerHTML = '<div class="bd-layer" style="display:none"></div><div class="bd-layer" style="display:none"></div>' +
+      bd.innerHTML = '<div class="bd-layer active"></div><div class="bd-layer"></div>' +
         '<video id="bg-trailer-video" muted playsinline preload="none"></video>' +
         '<div id="bg-trailer-shade"></div>';
     }
   }
-  function stopBgPreview() {
+  function enterTrailerSpotlight() {
+    var fEl = Focus.current() || document.querySelector('.focusable.focused');
+    var fCard = (fEl && fEl.classList && (fEl.classList.contains('card') || fEl.classList.contains('person-card'))) ? fEl : null;
+    document.body.classList.add('trailer-spotlight');
+    if (fCard) {
+      document.body.classList.add('has-spotlight-card');
+      fCard.classList.add('spotlight-card');
+      var fRow = fCard.closest ? (fCard.closest('section.row') || fCard.closest('.row')) : null;
+      if (fRow) fRow.classList.add('spotlight-row');
+      var fTrack = fCard.closest ? fCard.closest('.track') : null;
+      if (fTrack) {
+        if (spotlightRestoreTimer) { clearTimeout(spotlightRestoreTimer); spotlightRestoreTimer = null; }
+        fTrack.classList.remove('spotlight-restoring');
+        fTrack._preSpotlightTx = fTrack._tx || fTrack.style.transform || 'translate3d(0px,0,0)';
+        fTrack.classList.add('spotlight-track');
+        var targetShift = Math.max(0, (fCard.offsetLeft || 0) - 64);
+        fTrack.style.transform = 'translate3d(' + (-targetShift) + 'px,0,0)';
+        activeSpotlightTrack = fTrack;
+      }
+    } else {
+      document.body.classList.remove('has-spotlight-card');
+    }
+  }
+  function exitTrailerSpotlight() {
+    var wasSpotlight = document.body.classList.contains('trailer-spotlight');
+    document.body.classList.remove('trailer-spotlight');
+    document.body.classList.remove('has-spotlight-card');
+    each(document.querySelectorAll('.spotlight-card'), function (el) { el.classList.remove('spotlight-card'); });
+    each(document.querySelectorAll('.spotlight-row'), function (el) { el.classList.remove('spotlight-row'); });
+    if (activeSpotlightTrack) {
+      var trk = activeSpotlightTrack;
+      activeSpotlightTrack = null;
+      trk.classList.remove('spotlight-track');
+      if (wasSpotlight) {
+        trk.classList.add('spotlight-restoring');
+        if (trk._preSpotlightTx != null) {
+          trk.style.transform = trk._preSpotlightTx;
+          trk._tx = trk._preSpotlightTx;
+        }
+        if (spotlightRestoreTimer) clearTimeout(spotlightRestoreTimer);
+        spotlightRestoreTimer = setTimeout(function () {
+          trk.classList.remove('spotlight-restoring');
+          spotlightRestoreTimer = null;
+        }, 720);
+      }
+    }
+  }
+  function stopBgPreview(immediate) {
     if (bgTrailerTimer) { clearTimeout(bgTrailerTimer); bgTrailerTimer = null; }
     if (bgTrailerStopTimer) { clearTimeout(bgTrailerStopTimer); bgTrailerStopTimer = null; }
+    if (bgTrailerVolTimer) { clearInterval(bgTrailerVolTimer); bgTrailerVolTimer = null; }
     bgTrailerSeq++;
     bgTrailerItem = null;
+    exitTrailerSpotlight();
     if (!bd) return;
+    var wasPlaying = bd.classList.contains('trailer-playing');
     bd.classList.remove('trailer-playing');
     var v = document.getElementById('bg-trailer-video');
     if (v) {
-      v.onplaying = v.onended = v.onerror = v.onloadedmetadata = null;
+      v.onplaying = v.onended = v.onerror = v.onloadedmetadata = v.onseeked = v.ontimeupdate = null;
       try { v.pause(); } catch (e) {}
-      if (v.getAttribute('src')) {
-        v.removeAttribute('src');
-        try { v.load(); } catch (e2) {}
+      var doUnload = function () {
+        bgTrailerUnloadTimer = null;
+        if (bd && bd.classList.contains('trailer-playing')) return;
+        if (v.getAttribute('src')) {
+          v.removeAttribute('src');
+          try { v.load(); } catch (e2) {}
+        }
+      };
+      if (bgTrailerUnloadTimer) { clearTimeout(bgTrailerUnloadTimer); bgTrailerUnloadTimer = null; }
+      if (immediate || !wasPlaying || param('mock')) {
+        doUnload();
+      } else {
+        bgTrailerUnloadTimer = setTimeout(doUnload, 650);
       }
     }
   }
@@ -88,35 +149,73 @@
   function startBgPreviewNow(it, mySeq) {
     if (player || !screen || (screen.name !== 'home' && screen.name !== 'platform' && screen.name !== 'detail')) return;
     ensureBdLayers();
+    if (bgTrailerUnloadTimer) { clearTimeout(bgTrailerUnloadTimer); bgTrailerUnloadTimer = null; }
     var v = document.getElementById('bg-trailer-video');
     if (!v) return;
     resolveBgPreviewTarget(it).then(function (target) {
       if (!target || mySeq !== bgTrailerSeq || player) return;
       if (target.directUrl) {
-        return { url: target.directUrl, startSec: target.startSec || 0 };
+        return { url: target.directUrl, startSec: target.startSec || 0, isTrailer: !!target.isTrailer };
       }
       var pItem = target.playItem;
       if (!pItem || !pItem.Id) return null;
       var sTicks = Math.floor((target.startSec || 0) * 1e7);
-      var useNoDirect = !param('mock');
       return Api.playbackInfo(pItem.Id, { startTicks: sTicks, maxBitrate: 8000000 }).then(function (info) {
         if (!info || !info.MediaSources || !info.MediaSources[0]) return null;
         var mSrc = info.MediaSources[0];
         if (param('mock') && mSrc.TranscodingUrl && mSrc.TranscodingUrl.indexOf('/videos/mock/') === 0) {
-          return { url: Api.jf() + '/Videos/' + pItem.Id + '/stream?static=true&mediaSourceId=' + mSrc.Id + '&api_key=mock-token', startSec: target.startSec || 0, isTranscode: false };
+          return { url: Api.jf() + '/Videos/' + pItem.Id + '/stream?static=true&mediaSourceId=' + mSrc.Id + '&api_key=mock-token', startSec: target.startSec || 0, isTranscode: false, isTrailer: !!target.isTrailer };
         }
-        return { url: Api.streamUrl(pItem, info), startSec: target.startSec || 0, isTranscode: !!mSrc.TranscodingUrl };
+        return { url: Api.streamUrl(pItem, info), startSec: target.startSec || 0, isTranscode: !!mSrc.TranscodingUrl, isTrailer: !!target.isTrailer };
       });
     }).then(function (stream) {
       if (!stream || !stream.url || mySeq !== bgTrailerSeq || player) return;
+      var revealed = false, needSeek = false, seekDone = false, targetStart = 0;
       v.muted = false;
-      v.volume = 0.65;
+      v.volume = 0.02;
+      function checkReadyToReveal() {
+        if (revealed || mySeq !== bgTrailerSeq || player) return;
+        if (needSeek && !seekDone) return;
+        if (v.readyState < 3 || v.paused) return;
+        var minAdvance = param('mock') ? 0.01 : 0.12;
+        if (v.currentTime < targetStart + minAdvance) return;
+        revealed = true;
+        var doReveal = function () {
+          if (mySeq !== bgTrailerSeq || player) return;
+          bd.classList.add('trailer-playing');
+          enterTrailerSpotlight();
+          if (!v.muted) {
+            var vol = 0.04;
+            if (bgTrailerVolTimer) clearInterval(bgTrailerVolTimer);
+            bgTrailerVolTimer = setInterval(function () {
+              if (mySeq !== bgTrailerSeq || !bd.classList.contains('trailer-playing') || v.muted) {
+                clearInterval(bgTrailerVolTimer);
+                bgTrailerVolTimer = null;
+                return;
+              }
+              vol = Math.min(0.65, vol + 0.08);
+              try { v.volume = vol; } catch (e) {}
+              if (vol >= 0.65) { clearInterval(bgTrailerVolTimer); bgTrailerVolTimer = null; }
+            }, 80);
+          }
+          if (bgTrailerStopTimer) clearTimeout(bgTrailerStopTimer);
+          var maxPlayMs = stream.isTrailer ? 140000 : 38000;
+          bgTrailerStopTimer = setTimeout(function () {
+            if (mySeq === bgTrailerSeq) stopBgPreview(false);
+          }, maxPlayMs);
+        };
+        if (window.requestAnimationFrame) window.requestAnimationFrame(doReveal);
+        else doReveal();
+      }
       v.onloadedmetadata = function () {
         if (mySeq !== bgTrailerSeq || player) return;
         if (stream.startSec > 0 && !stream.isTranscode) {
           var d = v.duration;
           if (!d || !isFinite(d) || stream.startSec < d - 5) {
-            try { v.currentTime = stream.startSec; } catch (e) {}
+            targetStart = stream.startSec;
+            needSeek = true;
+            seekDone = false;
+            try { v.currentTime = stream.startSec; } catch (e) { needSeek = false; }
           }
         }
         var pr = v.play();
@@ -129,23 +228,22 @@
           });
         }
       };
-      v.onplaying = function () {
-        if (mySeq !== bgTrailerSeq || player) { stopBgPreview(); return; }
-        bd.classList.add('trailer-playing');
-        if (bgTrailerStopTimer) clearTimeout(bgTrailerStopTimer);
-        bgTrailerStopTimer = setTimeout(function () {
-          if (mySeq === bgTrailerSeq) stopBgPreview();
-        }, 45000);
+      v.onseeked = function () {
+        if (mySeq !== bgTrailerSeq || player) return;
+        seekDone = true;
+        checkReadyToReveal();
       };
+      v.onplaying = checkReadyToReveal;
+      v.ontimeupdate = checkReadyToReveal;
       v.onended = v.onerror = function () {
-        if (mySeq === bgTrailerSeq) stopBgPreview();
+        if (mySeq === bgTrailerSeq) stopBgPreview(false);
       };
       v.src = stream.url;
       try { v.load(); } catch (e) {}
     }, function () {});
   }
   function scheduleBgPreview(it) {
-    stopBgPreview();
+    stopBgPreview(false);
     if (player || !it || !it.Id || it._requestable || it._isCollection || String(it.Id).indexOf('req:') === 0 || String(it.Id).indexOf('col:') === 0) return;
     if (!screen || (screen.name !== 'home' && screen.name !== 'platform' && screen.name !== 'detail')) return;
     bgTrailerItem = it;
@@ -157,8 +255,18 @@
     }, delayMs);
   }
   function applyBdUrl(url) {
-    var bg = url ? 'linear-gradient(90deg, rgba(13,22,18,0.96) 0%, rgba(13,22,18,0.84) 40%, rgba(13,22,18,0.25) 76%, rgba(13,22,18,0.60) 100%), linear-gradient(180deg, rgba(13,22,18,0.32) 0%, rgba(13,22,18,0.12) 44%, rgba(13,22,18,0.96) 88%, #0D1612 100%), url("' + url + '")' : '';
-    bd.style.backgroundImage = bg;
+    ensureBdLayers();
+    var cssBg = url ? ('url("' + url + '")') : '';
+    bd.style.backgroundImage = cssBg;
+    var layers = bd.querySelectorAll('.bd-layer');
+    if (layers && layers.length >= 2) {
+      var nextIdx = 1 - bdLayerIdx;
+      var nextLayer = layers[nextIdx], prevLayer = layers[bdLayerIdx];
+      nextLayer.style.backgroundImage = cssBg || 'none';
+      nextLayer.classList.add('active');
+      prevLayer.classList.remove('active');
+      bdLayerIdx = nextIdx;
+    }
   }
   function art(url) {
     url = url || '';
@@ -176,7 +284,7 @@
           if (bdCurUrl === url) applyBdUrl(url);
         };
         img.src = url;
-      }, 160);
+      }, 140);
     }
   }
   function fmt(ticks) { var s = Math.floor((ticks || 0) / 1e7), m = Math.floor(s / 60); return m >= 60 ? Math.floor(m / 60) + 'h ' + (m % 60) + 'm' : m + 'm'; }
@@ -469,8 +577,29 @@
       '</div>';
   }
   var topHeroSectionHtml = heroSectionHtml;
+  function tryUpgradeReqItem(it, cardEl) {
+    if (!it || !it._requestable || !it.Name) return it;
+    var m = findServerMatch({ name: it.Name, year: it.ProductionYear, kind: it.Type }, globalLibLookup, true);
+    if (!m || !m.Id) return it;
+    var upgraded = cloneServerItemForPlatform(m, it._platformSlug || '', it._platformName || '');
+    if (it._platTrendRank) upgraded._platTrendRank = it._platTrendRank;
+    if (it._platPopRank) upgraded._platPopRank = it._platPopRank;
+    if (it._platCatalogYear) upgraded._platCatalogYear = it._platCatalogYear;
+    if (it._posterUrl && !upgraded._wpPoster) upgraded._wpPoster = it._posterUrl;
+    for (var k in upgraded) {
+      if (Object.prototype.hasOwnProperty.call(upgraded, k)) it[k] = upgraded[k];
+    }
+    delete it._requestable;
+    if (cardEl && cardEl.classList) {
+      cardEl.classList.remove('req-card');
+      var b = cardEl.querySelector && cardEl.querySelector('.req-badge');
+      if (b && b.parentNode) b.parentNode.removeChild(b);
+    }
+    return it;
+  }
   function updateHero(it, focusEl) {
     if (!it) return;
+    if (it._requestable) tryUpgradeReqItem(it, focusEl);
     currentHeroItem = it;
     art(Api.img(it, 'Backdrop', 1280) || Api.img(it, 'Primary', 1280));
     scheduleBgPreview(it);
@@ -566,7 +695,7 @@
       }
     };
   }
-  function curVer() { return (window.MLTV_OTA && MLTV_OTA.version()) || '0.1.30'; }
+  function curVer() { return (window.MLTV_OTA && MLTV_OTA.version()) || '0.1.31'; }
   function topbar(extra) { return '<div class="top"><div class="brand"><i></i>MojaLoss <span class="ver-badge" id="ver-badge">v' + h(curVer()) + '</span></div><div class="actions">' + (extra || '') + '</div></div>'; }
 
   /* In-app OTA Update modal, quota-safe storage & automatic OTA updates */
@@ -645,7 +774,7 @@
       m.className = "modal-backdrop";
       document.body.appendChild(m);
     }
-    var st = window.MLTV_OTA ? MLTV_OTA.state() : { activeVersion: "0.1.30", activeSource: "builtin", builtinVersion: "0.1.30" };
+    var st = window.MLTV_OTA ? MLTV_OTA.state() : { activeVersion: "0.1.31", activeSource: "builtin", builtinVersion: "0.1.31" };
     var avail = st.availableUpdate;
     var autoOn = isAutoUpdateOn();
     var statusHtml = st.updating ? "Downloading & installing update package…" :
@@ -846,9 +975,9 @@
     return Promise.all(pool).then(function () { return results; });
   }
 
-  var globalLibLookup = { all: [], byName: {}, byNoArt: {}, byImdb: {}, byTmdb: {} };
+  var globalLibLookup = { all: [], byName: {}, byNoArt: {}, byBase: {}, byImdb: {}, byTmdb: {} };
   function indexServerItems(items) {
-    var byName = globalLibLookup.byName, byNoArt = globalLibLookup.byNoArt, byImdb = globalLibLookup.byImdb, byTmdb = globalLibLookup.byTmdb;
+    var byName = globalLibLookup.byName, byNoArt = globalLibLookup.byNoArt, byBase = globalLibLookup.byBase, byImdb = globalLibLookup.byImdb, byTmdb = globalLibLookup.byTmdb;
     var seen = {};
     globalLibLookup.all.forEach(function (x) { if (x && x.Id) seen[x.Id] = 1; });
     (items || []).forEach(function (it) {
@@ -867,6 +996,8 @@
         if (k) (byName[k] = byName[k] || []).push(it);
         var na = noArtNorm(rawName);
         if (na) (byNoArt[na] = byNoArt[na] || []).push(it);
+        var bn = baseNorm(rawName);
+        if (bn && bn.length >= 4) (byBase[bn] = byBase[bn] || []).push(it);
       });
     });
     return globalLibLookup;
@@ -903,6 +1034,19 @@
         if (norm(c.Name) === k || (c.OriginalTitle && norm(c.OriginalTitle) === k) || noArtNorm(c.Name) === na) {
           seen[c.Id] = 1;
           unique.push(c);
+        }
+      }
+    }
+    if (!unique.length && allowRelaxedKind && entry.year) {
+      var bn = baseNorm(entry.name);
+      if (bn && bn.length >= 5 && lookup.byBase && lookup.byBase[bn]) {
+        var bList = lookup.byBase[bn];
+        for (var bIdx = 0; bIdx < bList.length; bIdx++) {
+          var bCand = bList[bIdx];
+          if (bCand && bCand.Id && !bCand._requestable && !seen[bCand.Id] && baseNorm(bCand.Name) === bn) {
+            seen[bCand.Id] = 1;
+            unique.push(bCand);
+          }
         }
       }
     }
@@ -1453,7 +1597,7 @@
     // 1. Process curated PLATFORM_CATALOG_DB first so explicit platform Trending (1..16) and Popular (1..15) ranks always take priority
     var unmatchedByNK = {};
     (PLATFORM_CATALOG_DB[slug] || []).forEach(function (entry) {
-      var m = findServerMatch(entry, lookup, false);
+      var m = findServerMatch(entry, lookup, true);
       if (m) {
         addServerItem(m, entry, true);
       } else {
@@ -1478,7 +1622,7 @@
         trend: (post.year && post.year >= 2025 && idx < 20) ? (20 + idx) : 0,
         pop: (post.year && post.year < 2025 && idx < 25) ? (20 + idx) : 0
       };
-      var m = findServerMatch(pEntry, lookup, false);
+      var m = findServerMatch(pEntry, lookup, true);
       if (m) {
         addServerItem(m, pEntry, false);
       } else {
@@ -1523,7 +1667,8 @@
     };
   }
   function doubleCheckPlatformWithServerSearch(p, onUpdated) {
-    if (!p || !p.allItems) return Promise.resolve(p);
+    if (!p || !p.allItems || p._serverSearchChecked) return Promise.resolve(p);
+    p._serverSearchChecked = true;
     var toVerify = (p.allItems || []).filter(function (x) { return x && x._requestable; });
     if (!toVerify.length) return Promise.resolve(p);
     var changed = false;
@@ -1567,7 +1712,7 @@
         p.items = nextItems;
         p.allItems = nextAll;
         savePlatformHubEntry(p);
-        if (onUpdated) onUpdated(p);
+        if (onUpdated) onUpdated(p, replacedByReqId);
       }
       return p;
     });
@@ -2238,6 +2383,18 @@
         p = platformHubCache[p.slug];
         a.p = p;
       }
+      if (!param('mock') && globalLibLookup.all.length < 50 && !a._libLoadedOnce) {
+        root.innerHTML = topbar('<div class="btn focusable" id="plat-search-btn">Search ' + h(p.name || 'Platform') + '</div>') + homeSkeletonHtml();
+        Api.libraryIndex().then(function (libRes) {
+          if (libRes && libRes.Items) indexServerItems(libRes.Items);
+          a._libLoadedOnce = true;
+          if (screen === me) render();
+        }, function () {
+          a._libLoadedOnce = true;
+          if (screen === me) render();
+        });
+        return;
+      }
       var resolved = resolvePlatformCatalog(p, p.posts || [], globalLibLookup);
       p.items = resolved.onServer;
       p.allItems = resolved.all;
@@ -2392,12 +2549,32 @@
 
       if (searchOpen && searchTerm) runPlatformSearch(searchTerm);
 
-      var ensureLib = globalLibLookup.all.length > 5 ? Promise.resolve() : Api.libraryIndex().then(function (libRes) {
+      var ensureLib = globalLibLookup.all.length > 50 ? Promise.resolve() : Api.libraryIndex().then(function (libRes) {
         if (libRes && libRes.Items) indexServerItems(libRes.Items);
       }, function () {});
       ensureLib.then(function () {
-        return doubleCheckPlatformWithServerSearch(p, function () {
-          if (screen === me && !searchTerm) render();
+        return doubleCheckPlatformWithServerSearch(p, function (updatedP, replacedByReqId) {
+          if (screen !== me || searchTerm || !replacedByReqId) return;
+          Object.keys(replacedByReqId).forEach(function (reqId) {
+            var realIt = replacedByReqId[reqId];
+            if (!realIt || !realIt.Id) return;
+            map[realIt.Id] = realIt;
+            map[reqId] = realIt;
+            each(root.querySelectorAll('.card[data-id="' + reqId + '"]'), function (cEl) {
+              cEl.setAttribute('data-id', realIt.Id);
+              cEl.classList.remove('req-card');
+              var bEl = cEl.querySelector('.req-badge');
+              if (bEl && bEl.parentNode) bEl.parentNode.removeChild(bEl);
+              var newImg = resolveCardImage(realIt, cEl.classList.contains('wide'));
+              if (newImg) {
+                var artDiv = cEl.querySelector('.art');
+                if (artDiv) artDiv.style.backgroundImage = "url('" + newImg + "')";
+                var imgEl = cEl.querySelector('.card-img');
+                if (imgEl) { imgEl.src = newImg; imgEl.style.display = ''; }
+              }
+              if (Focus.current() === cEl) updateHero(realIt, cEl);
+            });
+          });
         });
       });
 
@@ -2824,9 +3001,14 @@
         Focus.first(a.focus || '#play'); a.focus = null;
       }
       if (a.item && a.item._requestable) {
-        isLoading = false;
-        draw(a.item);
-        return;
+        var matchedSync = findServerMatch({ name: a.item.Name, year: a.item.ProductionYear, kind: a.item.Type }, globalLibLookup, true);
+        if (matchedSync && matchedSync.Id) {
+          a.item = cloneServerItemForPlatform(matchedSync, a.item._platformSlug || '', a.item._platformName || '');
+        } else {
+          isLoading = false;
+          draw(a.item);
+          return;
+        }
       }
       draw(a.item);
       var initSeriesId = a.item.Type === 'Series' ? a.item.Id : (a.item.SeriesId || null);
@@ -3224,23 +3406,36 @@
     });
     var chaps = (raw.chapters && raw.chapters.length ? raw.chapters : (item && item.Chapters)) || [];
     var durSec = (item && item.RunTimeTicks) ? (item.RunTimeTicks / 1e7) : 0;
+    var isMovieItem = !!(item && item.Type === 'Movie');
     for (var i = 0; i < chaps.length; i++) {
       var ch = chaps[i];
       if (!ch || ch.StartPositionTicks == null) continue;
       var cStart = ch.StartPositionTicks / 1e7;
       var cEnd = (i + 1 < chaps.length && chaps[i + 1].StartPositionTicks != null) ? (chaps[i + 1].StartPositionTicks / 1e7) : durSec;
       var name = String(ch.Name || '').trim();
-      if (/\b(intro|opening|op|theme song|title sequence|main titles|opening credits|logos|studio logos|prologue|cold open)\b/i.test(name)) addSeg('Intro', cStart, cEnd);
-      else if (/\b(recap|previously on)\b/i.test(name)) addSeg('Recap', cStart, cEnd);
-      else if (/\b(credits|end credits|ending|ed|outro)\b/i.test(name)) addSeg('Outro', cStart, cEnd);
+      if (isMovieItem) {
+        if (cStart <= 15 && cEnd <= 62 && /\b(intro|opening logos|studio logos|logos|title card)\b/i.test(name)) {
+          addSeg('Intro', cStart, Math.max(cStart + 15, cEnd - 2));
+        } else if (/\b(credits|end credits|ending|ed|outro)\b/i.test(name)) {
+          addSeg('Outro', cStart, cEnd);
+        }
+      } else {
+        if (/\b(intro|opening|op|theme song|title sequence|main titles|opening credits|logos|studio logos)\b/i.test(name)) addSeg('Intro', cStart, cEnd);
+        else if (/\b(recap|previously on)\b/i.test(name)) addSeg('Recap', cStart, cEnd);
+        else if (/\b(credits|end credits|ending|ed|outro)\b/i.test(name)) addSeg('Outro', cStart, cEnd);
+      }
     }
     var hasIntro = out.some(function (s) { return s.type === 'Intro'; });
     if (!hasIntro && chaps.length >= 2 && chaps[0] && chaps[1] && chaps[1].StartPositionTicks != null) {
       var c0 = (chaps[0].StartPositionTicks || 0) / 1e7, c1 = chaps[1].StartPositionTicks / 1e7;
-      if (c0 <= 10 && c1 >= 20 && c1 <= 240) { addSeg('Intro', c0, c1); hasIntro = true; }
+      if (isMovieItem) {
+        if (c0 <= 5 && c1 >= 25 && c1 <= 55) { addSeg('Intro', c0, Math.max(22, c1 - 2)); hasIntro = true; }
+      } else if (c0 <= 10 && c1 >= 20 && c1 <= 160) {
+        addSeg('Intro', c0, c1); hasIntro = true;
+      }
     }
-    if (!hasIntro && item && item.Type === 'Movie' && !raw._initOnly && (durSec >= 1200 || !durSec)) {
-      addSeg('Intro', 5, 90);
+    if (!hasIntro && isMovieItem && !raw._initOnly && (durSec >= 1200 || !durSec)) {
+      addSeg('Intro', 3, 46);
     }
     out.sort(function (a, b) { return a.startSec - b.startSec; });
     return out;
@@ -3725,7 +3920,7 @@
     findServerMatch: findServerMatch,
     scheduleBgPreview: scheduleBgPreview,
     stopBgPreview: stopBgPreview,
-    bgTrailerState: function () { var v = document.getElementById('bg-trailer-video'); return { playing: !!(bd && bd.classList.contains('trailer-playing')), hasTimer: !!bgTrailerTimer, itemId: bgTrailerItem && bgTrailerItem.Id, src: v ? v.getAttribute('src') : null, paused: v ? v.paused : true }; },
+    bgTrailerState: function () { var v = document.getElementById('bg-trailer-video'); return { playing: !!(bd && bd.classList.contains('trailer-playing')), spotlight: document.body.classList.contains('trailer-spotlight'), hasTimer: !!bgTrailerTimer, itemId: bgTrailerItem && bgTrailerItem.Id, src: v ? v.getAttribute('src') : null, paused: v ? v.paused : true }; },
     buildAllTimePopularByKind: buildAllTimePopularByKind,
     indexServerItems: indexServerItems,
     sectionRegistry: function () { return sectionRegistry; },

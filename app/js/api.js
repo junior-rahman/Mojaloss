@@ -324,8 +324,8 @@ var Api = (function () {
         return req('GET', '/Items?' + qs({ userId: userId(), IncludeItemTypes: 'Movie,Series', Recursive: true, Fields: INDEX_FIELDS, Limit: 12500 }));
       }
       return Promise.all([
-        req('GET', '/Items?' + qs({ userId: userId(), IncludeItemTypes: 'Series', Recursive: true, SortBy: 'PremiereDate,ProductionYear,SortName', SortOrder: 'Descending', Fields: INDEX_FIELDS, Limit: 3000 })).catch(function () { return { Items: [] }; }),
-        req('GET', '/Items?' + qs({ userId: userId(), IncludeItemTypes: 'Movie', Recursive: true, SortBy: 'PremiereDate,ProductionYear,SortName', SortOrder: 'Descending', Fields: INDEX_FIELDS, Limit: 8500 })).catch(function () { return { Items: [] }; })
+        req('GET', '/Items?' + qs({ userId: userId(), IncludeItemTypes: 'Series', Recursive: true, SortBy: 'PremiereDate,ProductionYear,SortName', SortOrder: 'Descending', Fields: INDEX_FIELDS, Limit: 4000 })).catch(function () { return { Items: [] }; }),
+        req('GET', '/Items?' + qs({ userId: userId(), IncludeItemTypes: 'Movie', Recursive: true, SortBy: 'PremiereDate,ProductionYear,SortName', SortOrder: 'Descending', Fields: INDEX_FIELDS, Limit: 12000 })).catch(function () { return { Items: [] }; })
       ]).then(function (parts) {
         var combined = ((parts[0] && parts[0].Items) || []).concat((parts[1] && parts[1].Items) || []);
         var res = { Items: combined, TotalRecordCount: combined.length };

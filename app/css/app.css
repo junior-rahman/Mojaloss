@@ -4,10 +4,12 @@
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{width:100vw;height:100vh;margin:0;padding:0;overflow:hidden;background:var(--porcelain);color:var(--ink);font-family:"SamsungOne",-apple-system,BlinkMacSystemFont,"Segoe UI","Roboto","Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased;user-select:none}
 #backdrop{position:fixed;top:0;left:0;width:100vw;height:100vh;background:#0D1612 center/cover no-repeat;overflow:hidden;pointer-events:none;z-index:0}
-.bd-layer{position:absolute;top:0;left:0;right:0;bottom:0;display:none}
-#bg-trailer-video{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .6s ease;pointer-events:none;z-index:1}
-#bg-trailer-shade{position:absolute;top:0;left:0;right:0;bottom:0;background:linear-gradient(90deg,rgba(13,22,18,.96) 0%,rgba(13,22,18,.82) 38%,rgba(13,22,18,.22) 76%,rgba(13,22,18,.58) 100%),linear-gradient(180deg,rgba(13,22,18,.30) 0%,rgba(13,22,18,.10) 44%,rgba(13,22,18,.96) 88%,#0D1612 100%);opacity:0;transition:opacity .6s ease;pointer-events:none;z-index:2}
-#backdrop.trailer-playing #bg-trailer-video,#backdrop.trailer-playing #bg-trailer-shade{opacity:1}
+.bd-layer{position:absolute;top:0;left:0;right:0;bottom:0;background:center/cover no-repeat;opacity:0;transition:opacity .48s cubic-bezier(.22,1,.36,1);pointer-events:none;z-index:0}
+.bd-layer.active{opacity:1}
+#bg-trailer-video{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;background:transparent;opacity:0;transform:scale(1.015);transition:opacity .85s cubic-bezier(.22,1,.36,1),transform 1.15s cubic-bezier(.22,1,.36,1);pointer-events:none;z-index:1}
+#bg-trailer-shade{position:absolute;top:0;left:0;right:0;bottom:0;background:linear-gradient(90deg,rgba(13,22,18,.96) 0%,rgba(13,22,18,.82) 38%,rgba(13,22,18,.22) 76%,rgba(13,22,18,.58) 100%),linear-gradient(180deg,rgba(13,22,18,.30) 0%,rgba(13,22,18,.10) 44%,rgba(13,22,18,.96) 88%,#0D1612 100%);opacity:1;transition:opacity .75s cubic-bezier(.22,1,.36,1);pointer-events:none;z-index:2}
+#backdrop.trailer-playing #bg-trailer-video{opacity:1;transform:scale(1)}
+body.trailer-spotlight #bg-trailer-shade{opacity:.24}
 #root{position:fixed;top:0;left:0;width:1920px;height:1080px;padding:0;display:flex;flex-direction:column;overflow:hidden;transform-origin:0 0;z-index:1}
 h1{font-size:52px;font-weight:800;line-height:1.05;letter-spacing:-.8px}
 h2{font-size:19px;font-weight:700;padding:0 64px;margin:0 0 16px;letter-spacing:1.4px;text-transform:uppercase;color:var(--ink2)}
@@ -19,7 +21,7 @@ h2{font-size:19px;font-weight:700;padding:0 64px;margin:0 0 16px;letter-spacing:
 .glass{background:var(--glass);border:1px solid var(--rim);border-radius:var(--r)}
 
 /* Hardware-only transform transitions (120ms, zero box-shadow animation) */
-.focusable{outline:none;transition:transform .12s cubic-bezier(.2,1,.3,1),border-color .12s ease,background-color .12s ease}
+.focusable{outline:none;transition:transform .12s cubic-bezier(.2,1,.3,1),border-color .12s ease,background-color .12s ease,opacity .62s cubic-bezier(.22,1,.36,1)}
 .focusable.focused{transform:translate3d(0,-4px,0) scale(1.04);border-color:var(--forest)!important;box-shadow:0 0 0 3px var(--forest);z-index:4}
 
 .btn{display:inline-flex;align-items:center;gap:12px;height:54px;padding:0 32px;border-radius:27px;font-size:20px;font-weight:600;background:rgba(24,40,32,.92);color:var(--ink);border:1.5px solid var(--rim)}
@@ -40,13 +42,22 @@ h2{font-size:19px;font-weight:700;padding:0 64px;margin:0 0 16px;letter-spacing:
 .rows{flex:1 1 auto;min-height:0;height:656px;overflow:hidden;position:relative}
 .rows-inner{position:relative;transition:transform .15s cubic-bezier(.2,1,.3,1);will-change:transform}
 #regional-rows{position:relative}
-.row{margin-bottom:36px;position:relative;transition:opacity .15s ease}
+.top,.hero,.detail,.plat-search-wrap,.row>h2{transition:opacity .62s cubic-bezier(.22,1,.36,1)}
+.row{margin-bottom:36px;position:relative;transition:opacity .62s cubic-bezier(.22,1,.36,1)}
 .row.row-above{opacity:0;pointer-events:none}
 .row.row-active{opacity:1}
 .row.row-next{opacity:.92}
 .row.row-far{opacity:.78}
 
 .track{display:flex;gap:28px;position:relative;margin:0;padding:12px 64px 22px 64px;transition:transform .14s cubic-bezier(.2,1,.3,1);will-change:transform}
+.track.spotlight-track,.track.spotlight-restoring{transition:transform .72s cubic-bezier(.22,1,.36,1)}
+body.trailer-spotlight .top,body.trailer-spotlight .plat-search-wrap,body.trailer-spotlight #ota-banner{opacity:0;pointer-events:none}
+body.trailer-spotlight.has-spotlight-card #hero,body.trailer-spotlight.has-spotlight-card .detail{opacity:0;pointer-events:none}
+body.trailer-spotlight .row:not(.spotlight-row){opacity:0!important;pointer-events:none}
+body.trailer-spotlight .spotlight-row>h2,body.trailer-spotlight .spotlight-row .ep-preview,body.trailer-spotlight .spotlight-row .sim-preview,body.trailer-spotlight .spotlight-row .cast-preview{opacity:0!important;pointer-events:none}
+body.trailer-spotlight .spotlight-row .card:not(.spotlight-card),body.trailer-spotlight .spotlight-row .see-all-card:not(.spotlight-card),body.trailer-spotlight .spotlight-row .chip:not(.spotlight-card),body.trailer-spotlight .spotlight-row .person-card:not(.spotlight-card){opacity:0!important;pointer-events:none}
+body.trailer-spotlight .spotlight-row .spotlight-card{opacity:1!important}
+body.trailer-spotlight:not(.has-spotlight-card) .hero-desc,body.trailer-spotlight:not(.has-spotlight-card) .hero .meta,body.trailer-spotlight:not(.has-spotlight-card) .hero-eyebrow,body.trailer-spotlight:not(.has-spotlight-card) .hero .btn:not(.focused),body.trailer-spotlight:not(.has-spotlight-card) .detail p,body.trailer-spotlight:not(.has-spotlight-card) .detail-credits,body.trailer-spotlight:not(.has-spotlight-card) .detail .meta,body.trailer-spotlight:not(.has-spotlight-card) .detail .btn:not(.focused){opacity:0;pointer-events:none}
 
 /* Pure Artwork Cards — zero bottom text banner clutter */
 .card{flex:0 0 auto;width:210px;border-radius:18px;overflow:hidden;background:var(--low);border:2px solid rgba(255,255,255,.08);position:relative}

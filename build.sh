@@ -69,14 +69,23 @@ def minify_js(j):
         res = res.replace(old_s, new_s)
     def trim_cat_overview(m):
         prefix, ov, suffix = m.group(1), m.group(2), m.group(3)
-        if len(ov) > 36:
-            cut = ov[:33].rsplit(" ", 1)[0].rstrip(".,;:") + "."
+        if len(ov) > 26:
+            cut = ov[:24].rsplit(" ", 1)[0].rstrip(".,;:") + "."
             return prefix + cut + suffix
         return m.group(0)
-    res = re.sub(r"(_c\([^\n]*?,\[[^\]]*\],')((?:\\'|[^']){37,})(',[0-9])", trim_cat_overview, res)
+    res = re.sub(r"(_c\([^\n]*?,\[[^\]]*\],')((?:\\'|[^']){27,})(',[0-9])", trim_cat_overview, res)
     res = res.replace("https://www.mojaloss.stream/wp-content/uploads/", "/wp-content/uploads/")
+    res = res.replace("function (", "function(")
     res = re.sub(r'\n\s*', '\n', res)
-    return res
+    joined = []
+    for ln in res.splitlines():
+        if '//' in ln and 'http://' not in ln and 'https://' not in ln and 'file://' not in ln:
+            ln = re.sub(r'\s*//[^"\x27]+$', '', ln)
+        if joined and joined[-1] and joined[-1][-1] in ';{},' and '//' not in joined[-1]:
+            joined[-1] += ln
+        else:
+            joined.append(ln)
+    return "\n".join(joined)
 
 s = minify_css(s)
 js_raw = "\n".join([
@@ -93,7 +102,7 @@ bundle = {
     "versionCode": vcode,
     "sha256": sha,
     "releasedAt": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    "notes": f"v{ver}: Automatic OTA updates, quota-safe localStorage installer & cache eviction so updates install on the first click without looping, plus IMDb Hub, Popular Movies/Series of All Time, and 5-card scroll",
+    "notes": f"v{ver}: Trailer Spotlight Mode (glides focused card left, fades rows out during trailer & restores on end/browse), Platform Hub focus & Request badge fix, smooth photo-to-video crossfade, and accurate 46s Movie Skip Intro",
     "css": s,
     "js": js_bundle
 }
