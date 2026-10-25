@@ -422,7 +422,7 @@
       }
     };
   }
-  function curVer() { return (window.MLTV_OTA && MLTV_OTA.version()) || '0.1.25'; }
+  function curVer() { return (window.MLTV_OTA && MLTV_OTA.version()) || '0.1.26'; }
   function topbar(extra) { return '<div class="top"><div class="brand"><i></i>MojaLoss <span class="ver-badge" id="ver-badge">v' + h(curVer()) + '</span></div><div class="actions">' + (extra || '') + '</div></div>'; }
 
   /* In-app OTA Update modal, quota-safe storage & automatic OTA updates */
@@ -501,7 +501,7 @@
       m.className = "modal-backdrop";
       document.body.appendChild(m);
     }
-    var st = window.MLTV_OTA ? MLTV_OTA.state() : { activeVersion: "0.1.25", activeSource: "builtin", builtinVersion: "0.1.25" };
+    var st = window.MLTV_OTA ? MLTV_OTA.state() : { activeVersion: "0.1.26", activeSource: "builtin", builtinVersion: "0.1.26" };
     var avail = st.availableUpdate;
     var autoOn = isAutoUpdateOn();
     var statusHtml = st.updating ? "Downloading & installing update package…" :
@@ -1651,62 +1651,57 @@
 
   function buildAllTimePopularByKind(wantKind, lookup) {
     var db = lookup || globalLibLookup;
-    var candidates = [];
-    var seenNK = {};
-    function addCandidate(entry, slug, priorityTier) {
-      if (!entry || !entry.name || (entry.kind || "Movie") !== wantKind) return;
-      var nk = keyNK(entry.name, wantKind);
-      if (!nk || seenNK[nk]) return;
-      seenNK[nk] = 1;
-      candidates.push({
-        entry: entry,
-        slug: slug,
-        pName: PLATFORM_DISPLAY_NAMES[slug] || "IMDb",
-        tier: priorityTier,
-        popRank: entry.pop || 99
-      });
-    }
-    // Tier 1: IMDb All-Time Top list for this kind
-    ((PLATFORM_CATALOG_DB && PLATFORM_CATALOG_DB.imdb) || []).forEach(function (entry) {
-      if (entry && entry.imdbBucket === "alltime" && (entry.kind || "Movie") === wantKind) {
-        addCandidate(entry, "imdb", 1);
+    var out = [], seenIds = {}, seenNK = {};
+    function addServerItem(it) {
+      if (!it || !it.Id || it._requestable) return;
+      if (String(it.Id).indexOf("req:") === 0) return;
+      if ((it.Type || "") !== wantKind) return;
+      var yr = itemReleaseYear(it) || 0;
+      if (yr < 2000) return;
+      if (seenIds[it.Id]) return;
+      var nk = keyNK(it.Name || it.OriginalTitle || "", wantKind);
+      if (nk && seenNK[nk]) return;
+      seenIds[it.Id] = 1;
+      if (nk) seenNK[nk] = 1;
+      var clean = {};
+      for (var k in it) {
+        if (Object.prototype.hasOwnProperty.call(it, k) && k !== "_requestable" && k !== "_imdbBucket" && k !== "_imdbBuckets") {
+          clean[k] = it[k];
+        }
       }
-    });
-    // Tier 2: Cross-platform All-Time Popular (pop > 0) flagships across all platforms
-    var crossPlat = [];
+      if (clean._platSlug === "imdb") {
+        delete clean._platSlug;
+        delete clean._platName;
+      }
+      out.push(clean);
+    }
+
+    // 1. Server-available titles matched from non-IMDb streaming platforms
     Object.keys(PLATFORM_CATALOG_DB || {}).forEach(function (slug) {
       if (slug === "imdb") return;
       (PLATFORM_CATALOG_DB[slug] || []).forEach(function (entry) {
-        if (entry && entry.pop && entry.pop > 0 && (entry.kind || "Movie") === wantKind) {
-          crossPlat.push({ entry: entry, slug: slug });
-        }
+        if (!entry || (entry.kind || "Movie") !== wantKind) return;
+        if ((entry.year || 0) < 2000) return;
+        var m = findServerMatch(entry, db, false);
+        if (m && m.Id && !m._requestable) addServerItem(m);
       });
     });
-    crossPlat.sort(function (a, b) {
-      return (a.entry.pop || 99) - (b.entry.pop || 99);
-    });
-    crossPlat.forEach(function (cp) {
-      addCandidate(cp.entry, cp.slug, 2);
+
+    // 2. Server-available titles from live discovery platforms (excluding IMDb) and trending
+    if (discoveryCache) {
+      ((discoveryCache.trending) || []).forEach(function (it) { addServerItem(it); });
+      ((discoveryCache.platforms) || []).forEach(function (p) {
+        if (!p || p.slug === "imdb") return;
+        ((p.items) || []).forEach(function (it) { addServerItem(it); });
+      });
+    }
+
+    // 3. All other real server-available titles of this kind released in 2000 or later
+    ((db && db.all) || []).forEach(function (it) {
+      addServerItem(it);
     });
 
-    var out = [], seenIds = {};
-    candidates.forEach(function (c, idx) {
-      var m = findServerMatch(c.entry, db, false);
-      if (m && m.Id) {
-        if (seenIds[m.Id]) return;
-        seenIds[m.Id] = 1;
-        var cloned = cloneServerItemForPlatform(m, c.slug, c.pName);
-        cloned._platPopRank = idx + 1;
-        out.push(cloned);
-      } else {
-        var fb = makeCatalogFallbackItem(c.entry, c.slug, c.pName);
-        if (seenIds[fb.Id]) return;
-        seenIds[fb.Id] = 1;
-        fb._platPopRank = idx + 1;
-        out.push(fb);
-      }
-    });
-    return out;
+    return sortByReleaseDateDesc(out);
   }
 
   function buildServerCollections(allServerItems, boxSets) {
@@ -1840,8 +1835,8 @@
         if (nextUpItems.length) html += nextUpRow('Next Up', nextUpItems, 'nextup');
         html += row('Latest Movies', (r[1] && r[1].Items) || [], false, 'lm', '', 'release') + row('Latest Series', (r[2] && r[2].Items) || [], false, 'ls', '', 'release');
         if (recentUploadItems.length) html += row('Recently Uploaded', recentUploadItems, false, 'recently-uploaded', 'data-regional="Recently Uploaded"', 'upload');
-        if (popMoviesAllTime.length) html += row('Popular Movies of All Time', popMoviesAllTime, false, 'popular-movies-alltime', 'data-regional="Popular Movies of All Time"', 'preserve');
-        if (popSeriesAllTime.length) html += row('Popular Series of All Time', popSeriesAllTime, false, 'popular-series-alltime', 'data-regional="Popular Series of All Time"', 'preserve');
+        if (popMoviesAllTime.length) html += row('Popular Movies of All Time', popMoviesAllTime, false, 'popular-movies-alltime', 'data-regional="Popular Movies of All Time"', 'release');
+        if (popSeriesAllTime.length) html += row('Popular Series of All Time', popSeriesAllTime, false, 'popular-series-alltime', 'data-regional="Popular Series of All Time"', 'release');
         html += '<div id="regional-rows"></div>';
         if (collectionsList.length) html += row('Collections', collectionsList, false, 'collections', 'data-regional="Collections"', 'preserve');
         if (((r[3] && r[3].Items) || []).length) html += row('My List', r[3].Items, false, 'fav', '', 'release');
@@ -1902,7 +1897,7 @@
             var freshPopMovies = buildAllTimePopularByKind("Movie", globalLibLookup);
             freshPopMovies.forEach(function (it) { map[it.Id] = it; });
             var pmWrap = document.createElement('div');
-            pmWrap.innerHTML = row('Popular Movies of All Time', freshPopMovies, false, 'popular-movies-alltime', 'data-regional="Popular Movies of All Time"', 'preserve');
+            pmWrap.innerHTML = row('Popular Movies of All Time', freshPopMovies, false, 'popular-movies-alltime', 'data-regional="Popular Movies of All Time"', 'release');
             if (pmWrap.firstChild) {
               pmSec.innerHTML = pmWrap.firstChild.innerHTML;
               wireCards(map, pmSec);
@@ -1913,7 +1908,7 @@
             var freshPopSeries = buildAllTimePopularByKind("Series", globalLibLookup);
             freshPopSeries.forEach(function (it) { map[it.Id] = it; });
             var psWrap = document.createElement('div');
-            psWrap.innerHTML = row('Popular Series of All Time', freshPopSeries, false, 'popular-series-alltime', 'data-regional="Popular Series of All Time"', 'preserve');
+            psWrap.innerHTML = row('Popular Series of All Time', freshPopSeries, false, 'popular-series-alltime', 'data-regional="Popular Series of All Time"', 'release');
             if (psWrap.firstChild) {
               psSec.innerHTML = psWrap.firstChild.innerHTML;
               wireCards(map, psSec);
