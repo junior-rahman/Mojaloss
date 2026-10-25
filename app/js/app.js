@@ -695,7 +695,7 @@
       }
     };
   }
-  function curVer() { return (window.MLTV_OTA && MLTV_OTA.version()) || '0.1.37'; }
+  function curVer() { return (window.MLTV_OTA && MLTV_OTA.version()) || '0.1.38'; }
   function topbar(extra) { return '<div class="top"><div class="brand"><i></i>MojaLoss <span class="ver-badge" id="ver-badge">v' + h(curVer()) + '</span></div><div class="actions">' + (extra || '') + '</div></div>'; }
 
   /* In-app OTA Update modal, quota-safe storage & automatic OTA updates */
@@ -734,6 +734,7 @@
 
   function maybeTriggerAutoUpdate(res) {
     if (!res || !res.hasUpdate || !res.remote || !window.MLTV_OTA) return;
+    if (document.getElementById("update-modal")) return;
     if (!isAutoUpdateOn()) return;
     if (window.MLTV_OTA && MLTV_OTA.pinned && MLTV_OTA.pinned()) return;
     var isTestEnv = !!(param("mock") || param("ota"));
@@ -778,91 +779,114 @@
       m.className = "modal-backdrop";
       (document.getElementById("root") || document.body).appendChild(m);
     }
-    var st = window.MLTV_OTA ? MLTV_OTA.state() : { activeVersion: "0.1.37", activeSource: "builtin", builtinVersion: "0.1.37", pin: null };
+    var st = window.MLTV_OTA ? MLTV_OTA.state() : { activeVersion: "0.1.38", activeSource: "builtin", builtinVersion: "0.1.38", pin: null };
     var avail = st.availableUpdate;
     var autoOn = isAutoUpdateOn();
     var pin = st.pin;
-    var statusHtml = st.updating ? "Installing the update…" : "Already on the latest version.";
+    var statusHtml = "Checking the latest version…";
     m.innerHTML = "<div class=\"modal-card update-card glass\">" +
       "<div class=\"update-kicker\">Latest version</div>" +
       "<h1 class=\"update-ver\" id=\"ota-latest-ver\">v" + h(st.activeVersion) + "</h1>" +
       "<p class=\"update-lead\" id=\"ota-modal-status\">" + statusHtml + "</p>" +
       "<div id=\"ota-latest-action\"></div>" +
-      "<div class=\"ver-head\">Last version<span id=\"ota-ver-hint\">Click to see other versions</span></div>" +
-      "<div class=\"ver-list\" id=\"ota-version-list\"><p class=\"update-lead\">Loading versions…</p></div>" +
+      "<div class=\"ver-head\">Last version<span id=\"ota-ver-hint\"></span></div>" +
+      "<div class=\"ver-list\" id=\"ota-version-list\"><p class=\"update-lead\">Loading…</p></div>" +
       "<div class=\"update-actions\">" +
       "<div class=\"btn focusable\" id=\"ota-check-now\">Check</div>" +
       "<div class=\"btn focusable\" id=\"ota-auto-toggle\">Auto-Update " + (autoOn ? "On" : "Off") + "</div>" +
       "<div class=\"btn focusable\" id=\"ota-modal-close\">Close</div>" +
       "</div></div>";
+    function failText(err) {
+      return (err && err.message) ? err.message : "Could not switch versions";
+    }
     function paintVersions(list) {
       var box = document.getElementById("ota-version-list");
       var title = document.getElementById("ota-latest-ver");
       var sEl = document.getElementById("ota-modal-status");
       var action = document.getElementById("ota-latest-action");
+      var hint = document.getElementById("ota-ver-hint");
       if (!box) return;
-      if (!list || !list.length) {
-        box.innerHTML = "<p class=\"update-lead\">No versions found.</p>";
+      var ranked = [];
+      for (var i = 0; i < (list || []).length; i++) {
+        if (list[i] && list[i].bundleUrl && !list[i].blocked) ranked.push(list[i]);
+      }
+      if (!ranked.length) {
+        if (title) title.textContent = "v" + st.activeVersion;
+        if (sEl) sEl.textContent = "Couldn't load versions. You are on v" + st.activeVersion + ".";
+        box.innerHTML = "<p class=\"update-lead\">The version list did not load.</p>";
         return;
       }
-      var newest = list[0];
-      var previous = null;
-      for (var p = 1; p < list.length; p++) { if (!list[p].blocked) { previous = list[p]; break; } }
+      var newest = ranked[0];
+      var previous = ranked.length > 1 ? ranked[1] : null;
       var onLatest = newest.versionCode === st.activeVersionCode;
       if (title) title.textContent = "v" + newest.version;
-      if (sEl) sEl.textContent = onLatest ? "Already on the latest version." : ("Latest version is v" + newest.version + ".");
+      if (sEl) sEl.textContent = onLatest ? "Already on the latest version." : ("You are on v" + st.activeVersion + ".");
       if (action) {
         action.innerHTML = onLatest ? "" : "<div class=\"btn primary focusable ver-back\" id=\"ota-go-latest\">Update to latest version</div>";
         var up = document.getElementById("ota-go-latest");
         if (up) up.onclick = function () {
           if (sEl) sEl.textContent = "Updating to v" + newest.version + "…";
-          MLTV_OTA.useLatest();
+          MLTV_OTA.useLatest().then(function () {}, function (err) { if (sEl) sEl.textContent = failText(err); });
         };
       }
       var html = "";
-      for (var i = 1; i < list.length; i++) {
-        var v = list[i];
-        var isLast = previous && v.versionCode === previous.versionCode;
-        var sub = v.blocked ? "Too old for this TV" : (isLast ? "Last version" : (v.current ? "In use" : "Earlier version"));
-        html += "<div class=\"ver-row" + (v.blocked ? "" : " focusable") + (isLast ? " is-selected" : "") + "\" data-code=\"" + v.versionCode + "\">" +
-          "<span class=\"ver-radio\"></span><div class=\"ver-meta\"><b>v" + h(v.version) + "</b><span>" + h(sub) + "</span></div>" +
-          (isLast ? "<div class=\"ver-chev\">Show</div>" : "") + "</div>";
+      if (previous) {
+        var onLast = previous.versionCode === st.activeVersionCode;
+        html += "<div class=\"ver-row is-selected\"><span class=\"ver-radio\"></span><div class=\"ver-meta\"><b>v" + h(previous.version) + "</b><span>" + (onLast ? "You are on the last version" : "The version before the latest") + "</span></div></div>";
+        if (!onLast) html += "<div class=\"btn primary focusable ver-back\" id=\"ota-go-back\">Go back to last version</div>";
+      } else {
+        html += "<p class=\"update-lead\">No earlier version yet.</p>";
       }
-      if (previous) html += "<div class=\"btn primary focusable ver-back\" id=\"ota-go-back\">Go back to last version</div>";
-      box.innerHTML = html || "<p class=\"update-lead\">No earlier version.</p>";
+      html += "<div class=\"btn focusable ver-back\" id=\"ota-show-older\">Show other versions</div><div id=\"ota-older\"></div>";
+      box.innerHTML = html;
       var back = document.getElementById("ota-go-back");
       if (back && previous) back.onclick = function () {
         if (sEl) sEl.textContent = "Going back to v" + previous.version + "…";
-        MLTV_OTA.useVersion(previous);
+        MLTV_OTA.useVersion({ version: previous.version, versionCode: previous.versionCode, bundleUrl: previous.bundleUrl }).then(function (res) {
+          if (res && res.already && sEl) sEl.textContent = "Already on v" + previous.version + ".";
+        }, function (err) { if (sEl) sEl.textContent = failText(err); });
       };
-      var rows = box.querySelectorAll(".ver-row.focusable");
-      for (var b = 0; b < rows.length; b++) {
-        rows[b].onclick = function () {
-          var code = +this.getAttribute("data-code");
-          var entry = null;
-          for (var k = 0; k < list.length; k++) if (list[k].versionCode === code) entry = list[k];
-          if (!entry || entry.blocked) return;
-          var hint = document.getElementById("ota-ver-hint");
-          if (previous && entry.versionCode === previous.versionCode) {
-            var open = box.classList.contains("is-open");
-            if (open) box.classList.remove("is-open"); else box.classList.add("is-open");
-            if (hint) hint.textContent = open ? "Click to see other versions" : "Choose a version";
-            var chev = this.querySelector(".ver-chev");
-            if (chev) chev.textContent = open ? "Show" : "Hide";
-            return;
-          }
-          if (sEl) sEl.textContent = "Switching to v" + entry.version + "…";
-          MLTV_OTA.useVersion(entry);
-        };
+      var show = document.getElementById("ota-show-older");
+      if (show) show.onclick = function () {
+        var older = document.getElementById("ota-older");
+        if (!older) return;
+        if (older.getAttribute("data-open") === "1") {
+          older.innerHTML = "";
+          older.removeAttribute("data-open");
+          show.textContent = "Show other versions";
+          if (hint) hint.textContent = "";
+          return;
+        }
+        var more = "";
+        for (var n = 2; n < ranked.length; n++) {
+          more += "<div class=\"ver-row focusable\" data-code=\"" + ranked[n].versionCode + "\"><span class=\"ver-radio\"></span><div class=\"ver-meta\"><b>v" + h(ranked[n].version) + "</b><span>Earlier version</span></div></div>";
+        }
+        older.innerHTML = more || "<p class=\"update-lead\">No other versions.</p>";
+        older.setAttribute("data-open", "1");
+        show.textContent = "Hide other versions";
+        var rows = older.querySelectorAll(".ver-row");
+        for (var b = 0; b < rows.length; b++) {
+          rows[b].onclick = function () {
+            var code = +this.getAttribute("data-code");
+            var entry = null;
+            for (var k = 0; k < ranked.length; k++) if (ranked[k].versionCode === code) entry = ranked[k];
+            if (!entry) return;
+            if (sEl) sEl.textContent = "Switching to v" + entry.version + "…";
+            MLTV_OTA.useVersion({ version: entry.version, versionCode: entry.versionCode, bundleUrl: entry.bundleUrl }).then(function () {}, function (err) { if (sEl) sEl.textContent = failText(err); });
+          };
+        }
+      };
+      var focusEl = document.getElementById("ota-go-latest") || back || show;
+      if (focusEl && !box.getAttribute("data-focused")) {
+        box.setAttribute("data-focused", "1");
+        Focus.set(focusEl);
       }
-      var focusEl = document.getElementById("ota-go-latest") || back || box.querySelector(".ver-row.is-selected");
-      if (focusEl) Focus.set(focusEl);
     }
     document.getElementById("ota-check-now").onclick = function () {
       var sEl = document.getElementById("ota-modal-status");
-      if (sEl) sEl.textContent = "Checking for a newer version…";
+      if (sEl) sEl.textContent = "Checking the latest version…";
       MLTV_OTA.checkForUpdates(true).then(function () {
-        if (MLTV_OTA.listVersions) MLTV_OTA.listVersions().then(paintVersions);
+        if (document.getElementById("update-modal") && MLTV_OTA.listVersions) MLTV_OTA.listVersions().then(paintVersions);
       });
     };
     var autoBtn = document.getElementById("ota-auto-toggle");
@@ -870,16 +894,14 @@
       var next = !isAutoUpdateOn();
       setAutoUpdateOn(next);
       if (autoBtn) autoBtn.textContent = "Auto-Update " + (next ? "On" : "Off");
-      if (next && st.availableUpdate) maybeTriggerAutoUpdate({ hasUpdate: true, remote: st.availableUpdate });
     };
     if (window.MLTV_OTA && MLTV_OTA.listVersions) {
       MLTV_OTA.listVersions().then(paintVersions, function () {
+        var sEl = document.getElementById("ota-modal-status");
+        if (sEl) sEl.textContent = "Couldn't load versions. You are on v" + st.activeVersion + ".";
         var box = document.getElementById("ota-version-list");
-        if (box) box.innerHTML = "<p class=\"update-lead\">Couldn't load versions.</p>";
-        Focus.first("#ota-modal-close");
+        if (box) box.innerHTML = "<p class=\"update-lead\">The version list did not load.</p>";
       });
-    } else {
-      Focus.first("#ota-modal-close");
     }
     document.getElementById("ota-modal-close").onclick = closeUpdateModal;
   }
@@ -1064,7 +1086,6 @@
       if (prevRaw && MLTV_OTA.archiveBundle) {
         try { arch = MLTV_OTA.archiveBundle(JSON.parse(prevRaw)) || Promise.resolve(); } catch (e3) {}
       }
-      try { localStorage.removeItem("mltv_ota_bundle"); } catch (e4) {}
       var st = MLTV_OTA.state();
       var candidate = bundleOrNull || (st && st.availableUpdate) || null;
       return arch.then(function () {
