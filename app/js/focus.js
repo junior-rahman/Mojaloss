@@ -2,7 +2,7 @@
 var Focus = (function () {
   var cur = null;
   function scopeRoot() { return document.getElementById('player') || document.getElementById('update-modal') || document; }
-  function vis(e) { return e && (e.offsetParent !== null || !!e.closest('#player')); }
+  function vis(e) { return e && !e.closest('.detail-tab-hidden') && (e.offsetParent !== null || !!e.closest('#player')); }
   function all() {
     var nl = scopeRoot().querySelectorAll('.focusable'), out = [];
     for (var i = 0; i < nl.length; i++) if (vis(nl[i])) out.push(nl[i]);
@@ -26,12 +26,12 @@ var Focus = (function () {
     var ch = inner ? inner.children : [], out = [];
     for (var i = 0; i < ch.length; i++) {
       var el = ch[i];
-      if (el.classList && el.classList.contains('row') && el.style.display !== 'none') {
+      if (el.classList && el.classList.contains('row') && !el.classList.contains('detail-tab-hidden') && el.style.display !== 'none') {
         if (el.querySelector('.focusable')) out.push(el);
       } else if (el.id === 'regional-rows') {
         var rch = el.children;
         for (var j = 0; j < rch.length; j++) {
-          if (rch[j].classList && rch[j].classList.contains('row') && rch[j].style.display !== 'none' && rch[j].querySelector('.focusable')) {
+          if (rch[j].classList && rch[j].classList.contains('row') && !rch[j].classList.contains('detail-tab-hidden') && rch[j].style.display !== 'none' && rch[j].querySelector('.focusable')) {
             out.push(rch[j]);
           }
         }
@@ -63,7 +63,8 @@ var Focus = (function () {
     var y = rawTop;
     if (!isHome) {
       var rowH = row.offsetHeight || 240;
-      if (idx <= 0 || (rawTop + rowH <= 720)) y = 0;
+      if (idx <= 0) y = 0;
+      else if (row.id !== 'cast-row' && row.id !== 'similar-row' && (rawTop + rowH <= 840)) y = 0;
     }
     inner.style.transform = y <= 0 ? 'translateY(0px)' : 'translate3d(0,' + (-y) + 'px,0)';
     updateRowVisibility(inner, row, y, isHome);
@@ -75,12 +76,28 @@ var Focus = (function () {
 
     var parentRow = e.closest('section.row') || e.closest('.row');
     if (parentRow) parentRow._lastFocused = e;
+    var parentKeys = e.closest && e.closest('.keys');
+    if (parentKeys) parentKeys._lastFocused = e;
+    var parentRes = e.closest && e.closest('#res');
+    if (parentRes && e.classList && e.classList.contains('card')) parentRes._lastFocused = e;
 
+    var bGrid = e.closest && (e.closest('.browse-grid') || e.closest('.search-grid'));
+    if (bGrid) {
+      var gOff = Math.max(0, e.offsetTop - 180);
+      if (e.offsetTop < 340) gOff = 0;
+      bGrid.style.transform = 'translate3d(0,' + (-gOff) + 'px,0)';
+    }
     var track = e.closest('.track');
     if (track) {
-      var visW = (track.parentNode && track.parentNode.clientWidth) || 1808;
-      var off = Math.max(0, e.offsetLeft + e.offsetWidth + 96 - visW);
-      if (e === track.children[0]) off = 0;
+      var visW = (track.parentNode && track.parentNode.clientWidth) || 1920;
+      var ch = track.children;
+      var tIdx = Array.prototype.indexOf.call(ch, e);
+      var screenEdgeOff = Math.max(0, e.offsetLeft + e.offsetWidth + 112 - visW);
+      var afterFifthOff = 0;
+      if (tIdx >= 5 && ch[4]) {
+        afterFifthOff = Math.max(0, (e.offsetLeft + e.offsetWidth) - (ch[4].offsetLeft + ch[4].offsetWidth));
+      }
+      var off = (tIdx <= 0) ? 0 : Math.max(screenEdgeOff, afterFifthOff);
       var tx = 'translate3d(' + (-off) + 'px,0,0)';
       if (track._tx !== tx) {
         track._tx = tx;
@@ -93,7 +110,7 @@ var Focus = (function () {
       syncInnerScroll(inner, row, false);
     } else if (inner && (e.closest('#hero') || e.closest('.top'))) {
       var rows0 = visibleRows(inner);
-      if (rows0.length) {
+      if (rows0.length && (!inner.style.transform || e.closest('.top') || !e.closest('.side-stage'))) {
         inner._lastRow = rows0[0];
         inner.style.transform = 'translateY(0px)';
         updateRowVisibility(inner, rows0[0], 0, !!document.getElementById('hero'));
@@ -108,11 +125,28 @@ var Focus = (function () {
     // 1. O(1) Left/Right inside tracks, action bars, filter pills, and topbar
     if (dir === 'L' || dir === 'R') {
       var p = cur.parentNode;
-      if (p && p.classList && (p.classList.contains('track') || p.classList.contains('actions') || p.classList.contains('filters'))) {
+      if (p && p.classList && (p.classList.contains('track') || p.classList.contains('cast-works-track') || p.classList.contains('actions') || p.classList.contains('filters'))) {
         var sib = dir === 'R' ? cur.nextElementSibling : cur.previousElementSibling;
         while (sib) {
           if (sib.classList && sib.classList.contains('focusable') && vis(sib)) return set(sib);
           sib = dir === 'R' ? sib.nextElementSibling : sib.previousElementSibling;
+        }
+        var sideHero = document.querySelector('#hero.side-stage');
+        if (sideHero) {
+          if (dir === 'L' && p.classList.contains('track') && cur.classList.contains('card') && cur.closest('.side-rows')) {
+            sideHero._returnCard = cur;
+            var hPlayBtn = document.getElementById('hero-play');
+            if (hPlayBtn && vis(hPlayBtn)) return set(hPlayBtn);
+          } else if (dir === 'R' && cur.closest('#hero.side-stage')) {
+            if (sideHero._returnCard && vis(sideHero._returnCard)) return set(sideHero._returnCard);
+            var sInner = document.getElementById('rows');
+            var sRows = visibleRows(sInner);
+            if (sRows.length) {
+              var activeR = sInner._lastRow || sRows[0];
+              var retT = (activeR && activeR._lastFocused && vis(activeR._lastFocused)) ? activeR._lastFocused : (activeR && activeR.querySelector('.focusable'));
+              if (retT) return set(retT);
+            }
+          }
         }
         return;
       }
@@ -125,6 +159,15 @@ var Focus = (function () {
       var rows = visibleRows(inner);
       var curRow = cur.closest('section.row') || cur.closest('.row');
       if (curRow && inner.contains(curRow)) {
+        if (curRow.id === 'cast-row') {
+          if (dir === 'D' && cur.classList && cur.classList.contains('person-card')) {
+            var cwCard = curRow.querySelector('#cast-works-track .card.focusable');
+            if (cwCard && vis(cwCard)) { curRow._lastPerson = cur; return set(cwCard); }
+          } else if (dir === 'U' && cur.closest && cur.closest('#cast-works-track')) {
+            var pTarget = (curRow._lastPerson && vis(curRow._lastPerson)) ? curRow._lastPerson : curRow.querySelector('.person-card.focusable');
+            if (pTarget) return set(pTarget);
+          }
+        }
         var rIdx = rows.indexOf(curRow);
         if (dir === 'D') {
           if (rIdx >= 0 && rIdx + 1 < rows.length) {
@@ -147,6 +190,7 @@ var Focus = (function () {
         }
       } else if (hero && cur.closest('#hero')) {
         if (dir === 'D' && rows.length) {
+          if (hero._returnCard && vis(hero._returnCard)) return set(hero._returnCard);
           var firstR = rows[0];
           var targetFirst = (firstR._lastFocused && vis(firstR._lastFocused)) ? firstR._lastFocused : firstR.querySelector('.focusable');
           if (targetFirst) return set(targetFirst);
@@ -162,6 +206,84 @@ var Focus = (function () {
           var hPlay2 = document.getElementById('hero-play');
           if (hPlay2 && vis(hPlay2)) return set(hPlay2);
           if (rows.length) return set(rows[0].querySelector('.focusable'));
+        }
+      }
+    }
+
+    // 2b. O(1) Split Search (#tv-021-netflix-search): 6-col keyboard <-> 5-col results grid
+    var searchSplit = cur.closest && cur.closest('#tv-021-netflix-search');
+    if (searchSplit && rootScope === document) {
+      var keysBox = searchSplit.querySelector('.keys');
+      var resBox = document.getElementById('res');
+      if (keysBox && keysBox.contains(cur)) {
+        var kList = Array.prototype.slice.call(keysBox.querySelectorAll('.key.focusable'));
+        var kIdx = kList.indexOf(cur);
+        if (kIdx >= 0) {
+          if (kIdx < 36) {
+            var kr = Math.floor(kIdx / 6), kc = kIdx % 6;
+            if (dir === 'L') { if (kc > 0) return set(kList[kIdx - 1]); return; }
+            if (dir === 'R') {
+              if (kc < 5) return set(kList[kIdx + 1]);
+              if (resBox) {
+                var rTarget = (resBox._lastFocused && vis(resBox._lastFocused)) ? resBox._lastFocused : resBox.querySelector('.card.focusable');
+                if (rTarget) return set(rTarget);
+              }
+              return;
+            }
+            if (dir === 'U') { if (kr > 0) return set(kList[kIdx - 6]); return; }
+            if (dir === 'D') {
+              if (kr < 5) return set(kList[kIdx + 6]);
+              var actIdx = 36 + Math.min(2, Math.floor(kc / 2));
+              if (kList[actIdx]) return set(kList[actIdx]);
+              return;
+            }
+          } else {
+            var aIdx = kIdx - 36;
+            if (dir === 'L') { if (kIdx > 36) return set(kList[kIdx - 1]); return; }
+            if (dir === 'R') {
+              if (kIdx + 1 < kList.length) return set(kList[kIdx + 1]);
+              if (resBox) {
+                var rTarget2 = (resBox._lastFocused && vis(resBox._lastFocused)) ? resBox._lastFocused : resBox.querySelector('.card.focusable');
+                if (rTarget2) return set(rTarget2);
+              }
+              return;
+            }
+            if (dir === 'U') {
+              var upIdx = 30 + Math.min(5, aIdx * 2);
+              if (kList[upIdx]) return set(kList[upIdx]);
+              return;
+            }
+            if (dir === 'D') return;
+          }
+        }
+      } else if (resBox && resBox.contains(cur)) {
+        var cList = Array.prototype.slice.call(resBox.querySelectorAll('.card.focusable'));
+        var cIdx = cList.indexOf(cur);
+        var cols = 5;
+        if (cIdx >= 0) {
+          var cr = Math.floor(cIdx / cols), cc = cIdx % cols;
+          if (dir === 'R') {
+            if (cc < cols - 1 && cIdx + 1 < cList.length) return set(cList[cIdx + 1]);
+            return;
+          }
+          if (dir === 'L') {
+            if (cc > 0) return set(cList[cIdx - 1]);
+            if (keysBox) {
+              var kBack = (keysBox._lastFocused && vis(keysBox._lastFocused)) ? keysBox._lastFocused : (keysBox.querySelector('.key[data-k="f"]') || keysBox.querySelector('.key.focusable'));
+              if (kBack) return set(kBack);
+            }
+            return;
+          }
+          if (dir === 'D') {
+            if (cIdx + cols < cList.length) return set(cList[cIdx + cols]);
+            var lastRow = Math.floor((cList.length - 1) / cols);
+            if (lastRow > cr) return set(cList[cList.length - 1]);
+            return;
+          }
+          if (dir === 'U') {
+            if (cIdx - cols >= 0) return set(cList[cIdx - cols]);
+            return;
+          }
         }
       }
     }
@@ -191,6 +313,7 @@ var Focus = (function () {
     set: set,
     move: move,
     current: function () { return cur; },
+    cur: function () { return cur; },
     first: function (sel) { set(document.querySelector(sel || '.focusable')); },
     refreshRows: refreshRows,
     refresh: refreshRows,

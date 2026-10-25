@@ -3,7 +3,7 @@ const http = require('http'), fs = require('fs'), path = require('path'), crypto
 const APP = path.join(__dirname, '..', 'app');
 const log = [];
 const palette = ['#2f5d4b','#4a3b5c','#5c3b3b','#3b4f5c','#5c543b','#3b5c45','#6b4a2f','#2f4a6b'];
-const titles = [['Midnight Harbor',2026,'Movie'],['The Long Field',2025,'Series'],['Copper Sky',2026,'Movie'],['Northline',2026,'Series'],['Paper Lanterns',2024,'Movie'],['Salt & Iron',2025,'Series'],['Quiet Engines',2026,'Movie'],['Glass River',2023,'Movie'],['Wild Orchard',2025,'Series'],['Kite Season',2026,'Movie'],['The Ninth Door',2024,'Series'],['Ember Coast',2025,'Movie']];
+const titles = [['Midnight Harbor',2026,'Movie'],['The Long Field',2025,'Series'],['Copper Sky',2026,'Movie'],['Northline',2026,'Series'],['Paper Lanterns',2024,'Movie'],['Salt & Iron',2025,'Series'],['Quiet Engines',2026,'Movie'],['Glass River',2023,'Movie'],['Wild Orchard',2025,'Series'],['Kite Season',2026,'Movie'],['The Ninth Door',2024,'Series'],['Ember Coast',2025,'Movie'],['Lucky',2017,'Movie'],['The Gorge',2025,'Movie']];
 const peopleFixture = [
   { Id: 'p1', Name: 'Amina Rahman', Role: 'Detective Mira', Type: 'Actor', PrimaryImageTag: 'p' },
   { Id: 'p2', Name: 'Dev Sen', Role: 'Captain Kabir', Type: 'Actor', PrimaryImageTag: 'p' },
@@ -25,9 +25,9 @@ const state = { revoked: false, favs: { it2: true }, played: {}, reports: [], di
 function makeOtaBundle(mode) {
   const base = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'dist', 'tv-ota-bundle.json'), 'utf8'));
   if (mode === 'none') return base; // v0.1.9 (versionCode 9) -> no update
-  const ver = '0.1.13', vcode = 13;
+  const ver = '0.1.24', vcode = 24;
   let css = base.css + '\n.ver-badge{border-color:#B4D2BD}';
-  let js = base.js.replace(/0\.1\.12/g, '0.1.13');
+  let js = base.js.replace(/0\.1\.23/g, '0.1.24');
   if (mode === 'crash') {
     js = 'throw new Error("Simulated OTA boot crash in 0.1.10");';
   }
@@ -70,7 +70,7 @@ http.createServer((req, res) => {
   if (p === '/__log') return json(res, log);
   if (p === '/__state') { if (u.searchParams.get('revoked')) state.revoked = u.searchParams.get('revoked') === '1'; if (u.searchParams.get('direct')) state.direct = u.searchParams.get('direct') === '1'; if (u.searchParams.get('ota')) state.otaMode = u.searchParams.get('ota'); return json(res, { revoked: state.revoked, reports: state.reports, otaMode: state.otaMode }); }
   if (p === '/ota/tv-manifest.json' || p === '/ota/tv-ota-bundle.json') return json(res, makeOtaBundle(state.otaMode));
-  if (p === '/ota/releases/latest') return json(res, { tag_name: 'tv-v0.1.9', assets: [{ name: 'tv-ota-bundle.json', browser_download_url: 'http://localhost:8787/ota/tv-ota-bundle.json' }] });
+  if (p === '/ota/releases/latest') return json(res, { tag_name: 'tv-v0.1.9', assets: [{ name: 'tv-ota-bundle.json', browser_download_url: 'http://localhost:' + (process.env.PORT || 8787) + '/ota/tv-ota-bundle.json' }] });
   if (p === '/fixtures/clip.mp4') { const f = path.join(__dirname, 'fixtures/clip.mp4'), st = fs.statSync(f), r = req.headers.range;
     if (r) { const [a, b] = r.replace('bytes=', '').split('-'); const s0 = +a, e0 = b ? +b : st.size - 1; res.writeHead(206, { 'Content-Range': `bytes ${s0}-${e0}/${st.size}`, 'Accept-Ranges': 'bytes', 'Content-Length': e0 - s0 + 1, 'Content-Type': 'video/mp4' }); return fs.createReadStream(f, { start: s0, end: e0 }).pipe(res); }
     res.writeHead(200, { 'Content-Length': st.size, 'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes' }); return fs.createReadStream(f).pipe(res); }
@@ -99,6 +99,13 @@ http.createServer((req, res) => {
   if (/\/Episodes$/.test(p)) return json(res, { Items: eps });
   if (p.startsWith('/jelly/UserFavoriteItems/')) { const id = p.split('/').pop(); state.favs[id] = req.method === 'POST'; return json(res, { IsFavorite: state.favs[id] }); }
   if (p.startsWith('/jelly/UserPlayedItems/')) { const id = p.split('/').pop(); state.played[id] = req.method === 'POST'; return json(res, { Played: state.played[id] }); }
+  let msMatch = p.match(/^\/jelly\/MediaSegments\/([^/]+)$/);
+  if (msMatch) {
+    return json(res, { Items: [
+      { Id: 'seg-intro-' + msMatch[1], ItemId: msMatch[1], Type: 'Intro', StartTicks: 18 * 1e7, EndTicks: 42 * 1e7 },
+      { Id: 'seg-outro-' + msMatch[1], ItemId: msMatch[1], Type: 'Outro', StartTicks: 52 * 1e7, EndTicks: 59 * 1e7 }
+    ] });
+  }
   if (/\/PlaybackInfo$/.test(p)) { const a = u.searchParams.get('AudioStreamIndex');
     return json(res, { PlaySessionId: 'ps' + (a || '1'), MediaSources: [Object.assign({ Id: 'ms1', DefaultAudioStreamIndex: 1, MediaStreams: [{ Type: 'Video', Index: 0 }, { Type: 'Audio', Index: 1, DisplayTitle: 'English - AAC Stereo', Language: 'eng' }, { Type: 'Audio', Index: 2, DisplayTitle: 'Hindi - AC3 5.1', Language: 'hin' }, { Type: 'Subtitle', Index: 3, DisplayTitle: 'English (SRT)', IsExternal: true, IsTextSubtitleStream: true, DeliveryMethod: 'External', DeliveryUrl: '/Videos/x/ms1/Subtitles/3/0/Stream.vtt' }] },
       state.direct ? { DirectStreamUrl: null } : { TranscodingUrl: '/videos/mock/master.m3u8?AudioStreamIndex=' + (a || 1) })] }); }
@@ -107,8 +114,10 @@ http.createServer((req, res) => {
   if (m) { const bdp = m[2] === 'Backdrop'; res.writeHead(200, { 'Content-Type': 'image/svg+xml' }); return res.end(svg(m[1], bdp ? 1920 : 240, bdp ? 1080 : 360)); }
   m = p.match(/^\/jelly\/Items\/([^/]+)\/Similar$/); if (m) { const sim = items.filter(x => x.Id !== m[1]).slice(0, 6); return json(res, { Items: sim, TotalRecordCount: sim.length }); }
   m = p.match(/^\/jelly\/Items\/([^/]+)$/); if (m) { const it = JSON.parse(JSON.stringify(resume.find(x => x.Id === m[1]) || eps.find(x => x.Id === m[1]) || all.find(x => x.Id === m[1]) || {})); it.UserData = Object.assign({}, it.UserData, { IsFavorite: !!state.favs[m[1]] }); return json(res, it); }
-  if (p === '/jelly/Items') { let r = items.slice(); const t = u.searchParams.get('IncludeItemTypes'), s = u.searchParams.get('searchTerm');
+  if (p === '/jelly/Items') { let r = items.slice(); const t = u.searchParams.get('IncludeItemTypes'), s = u.searchParams.get('searchTerm'), pid = u.searchParams.get('PersonIds') || u.searchParams.get('Person');
     if (t && t !== 'Movie,Series') r = r.filter(x => x.Type === t); if (s) r = r.filter(x => x.Name.toLowerCase().includes(s.toLowerCase()));
+    if (pid) r = r.slice(0, 8);
+    if (t === 'BoxSet') return json(res, { Items: [{ Id: 'box1', Name: 'Northern Saga Collection', Type: 'BoxSet', ProductionYear: 2026, ChildCount: 4, Genres: ['Drama', 'Thriller'], ImageTags: { Primary: 't' }, BackdropImageTags: ['b'] }], TotalRecordCount: 1 });
     if (u.searchParams.get('Filters') === 'IsFavorite') r = items.filter(x => state.favs[x.Id]);
     return json(res, { Items: r, TotalRecordCount: r.length }); }
   m = p.match(/^\/jelly\/Videos\/([^/]+)\/stream$/); if (m) { res.writeHead(302, { Location: '/fixtures/clip.mp4' }); return res.end(); }
@@ -116,4 +125,4 @@ http.createServer((req, res) => {
   if (p === '/wp-json/wp/v2/posts') { const c = +u.searchParams.get('categories'); return json(res, (posts[c] || []).map(i => ({ id: i, title: { rendered: `${items[i].Name.replace('&', '&amp;')} (${items[i].ProductionYear}${items[i].Type === 'Series' ? '-' : ''})` } })).concat(c === 14 ? [{ id: 99, title: { rendered: 'Not In Library (2020)' } }] : [])); }
   let f = path.join(APP, p === '/' ? 'index.html' : p); if (!f.startsWith(APP) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) { res.writeHead(404); return res.end(); }
   const ext = path.extname(f); res.writeHead(200, { 'Content-Type': { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png' }[ext] || 'application/octet-stream' }); fs.createReadStream(f).pipe(res);
-}).listen(8787, () => console.log('mock on 8787'));
+}).listen(+(process.env.PORT || 8787), () => console.log('mock on ' + (process.env.PORT || 8787)));

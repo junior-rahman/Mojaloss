@@ -4,8 +4,8 @@ var Api = (function () {
   var JF = mock ? mock + '/jelly' : 'https://www.mojaloss.stream/jelly';
   var WP = mock ? mock + '/wp-json/wp/v2/' : 'https://www.mojaloss.stream/wp-json/wp/v2/';
   var NS = mock ? 'mltest.' : 'ml.';
-  var VERSION = '0.1.12';
-  var PLATFORM_SLUGS = ['netflix','prime','apple','disney','hbo','hulu','paramount','peacock','hotstar','zee5','sonyliv','altbalaji','mxplayer','voot','hoichoi','cruncyroll','crunchyroll','showtime'];
+  var VERSION = '0.1.23';
+  var PLATFORM_SLUGS = ['netflix','prime','apple','disney','hbo','hulu','paramount','peacock','hotstar','zee5','sonyliv','altbalaji','mxplayer','voot','hoichoi','cruncyroll','crunchyroll','showtime','imdb'];
 
   function get(k) { try { return localStorage.getItem(NS + k); } catch (e) { return null; } }
   function set(k, v) { try { localStorage.setItem(NS + k, v); } catch (e) {} }
@@ -45,9 +45,9 @@ var Api = (function () {
   function timed(p, ms) { return Promise.race([p, new Promise(function (_, rej) { setTimeout(function () { var e = new Error('timeout'); e.offline = true; rej(e); }, ms || 15000); })])
     .catch(function (e) { if (e && e.status === undefined) e.offline = true; throw e; }); }
   function qs(o) { return Object.keys(o).filter(function (k) { return o[k] !== undefined && o[k] !== ''; }).map(function (k) { return k + '=' + encodeURIComponent(o[k]); }).join('&'); }
-  var FIELDS = 'PrimaryImageAspectRatio,Overview,Genres,ProductionYear,PremiereDate,RunTimeTicks,OfficialRating,UserData,ImageTags,BackdropImageTags,SeriesName,ParentIndexNumber,IndexNumber,SeasonName,SeriesId,ParentBackdropItemId,ParentBackdropImageTags,SeriesPrimaryImageTag';
-  var DETAIL_FIELDS = FIELDS + ',People';
-  var INDEX_FIELDS = 'ProductionYear,PremiereDate,RunTimeTicks,OfficialRating,Genres,UserData,ImageTags,BackdropImageTags';
+  var FIELDS = 'PrimaryImageAspectRatio,Overview,Genres,ProductionYear,PremiereDate,DateCreated,RunTimeTicks,OfficialRating,UserData,ImageTags,BackdropImageTags,SeriesName,ParentIndexNumber,IndexNumber,SeasonName,SeriesId,ParentBackdropItemId,ParentBackdropImageTags,SeriesPrimaryImageTag';
+  var DETAIL_FIELDS = FIELDS + ',People,Chapters';
+  var INDEX_FIELDS = 'OriginalTitle,ProductionYear,PremiereDate,DateCreated,RunTimeTicks,OfficialRating,Genres,Overview,ProviderIds,Studios,UserData,ImageTags,BackdropImageTags,SeriesId,SeriesPrimaryImageTag,ParentBackdropItemId,ParentBackdropImageTags,ParentThumbItemId,ParentThumbImageTag';
   var libCache = null;
 
   return {
@@ -70,12 +70,34 @@ var Api = (function () {
     forgetToken: function () { try { localStorage.removeItem(NS + 'token'); localStorage.removeItem(NS + 'userId'); } catch (e) {} },
     userName: function () { return get('userName') || ''; },
     resume: function () { return req('GET', '/UserItems/Resume?' + qs({ userId: userId(), Limit: 16, MediaTypes: 'Video', Fields: FIELDS, EnableImageTypes: 'Primary,Backdrop,Thumb' })); },
-    latest: function (type) { return req('GET', '/Items?' + qs({ userId: userId(), IncludeItemTypes: type, Recursive: true, SortBy: 'PremiereDate,DateCreated', SortOrder: 'Descending', Limit: 24, Fields: FIELDS })); },
+    latest: function (type) { return req('GET', '/Items?' + qs({ userId: userId(), IncludeItemTypes: type, Recursive: true, SortBy: 'PremiereDate,ProductionYear,SortName', SortOrder: 'Descending', Limit: 40, Fields: FIELDS })); },
+    recentlyUploaded: function (limit) { return req('GET', '/Items?' + qs({ userId: userId(), IncludeItemTypes: 'Movie,Series', Recursive: true, SortBy: 'DateCreated,SortName', SortOrder: 'Descending', Limit: limit || 40, Fields: FIELDS })); },
+    boxSets: function (limit) { return req('GET', '/Items?' + qs({ userId: userId(), IncludeItemTypes: 'BoxSet', Recursive: true, SortBy: 'DateCreated,SortName', SortOrder: 'Descending', Limit: limit || 40, Fields: FIELDS })); },
+    collectionItems: function (parentId) { return req('GET', '/Items?' + qs({ userId: userId(), ParentId: parentId, IncludeItemTypes: 'Movie,Series', Recursive: true, SortBy: 'PremiereDate,ProductionYear,SortName', SortOrder: 'Ascending', Limit: 100, Fields: FIELDS })); },
     item: function (id) { return req('GET', '/Items/' + id + '?' + qs({ userId: userId(), Fields: DETAIL_FIELDS })); },
     search: function (term, limit) { return req('GET', '/Items?' + qs({ userId: userId(), searchTerm: term, IncludeItemTypes: 'Movie,Series', Recursive: true, Limit: limit || 30, Fields: FIELDS })); },
     nextUp: function (seriesId, limit) { return req('GET', '/Shows/NextUp?' + qs({ userId: userId(), seriesId: seriesId, Limit: limit || (seriesId ? 1 : 16), Fields: FIELDS, EnableImageTypes: 'Primary,Backdrop,Thumb' })); },
     episodes: function (seriesId) { return req('GET', '/Shows/' + seriesId + '/Episodes?' + qs({ userId: userId(), Fields: FIELDS, Limit: 300 })); },
     similar: function (id) { return req('GET', '/Items/' + id + '/Similar?' + qs({ userId: userId(), Limit: 16, Fields: FIELDS })); },
+    byPerson: function (personId, personName) {
+      var q = {
+        userId: userId(),
+        IncludeItemTypes: 'Movie,Series',
+        Recursive: true,
+        SortBy: 'PremiereDate,ProductionYear,SortName',
+        SortOrder: 'Descending',
+        Limit: 60,
+        Fields: FIELDS
+      };
+      if (personId) q.PersonIds = personId;
+      else if (personName) q.Person = personName;
+      return req('GET', '/Items?' + qs(q)).then(function (r) {
+        if ((r.Items || []).length || !personName || !personId) return r;
+        delete q.PersonIds;
+        q.Person = personName;
+        return req('GET', '/Items?' + qs(q));
+      });
+    },
     personImg: function (personId, tag, w) {
       if (personId && typeof personId === 'object') { tag = personId.PrimaryImageTag; personId = personId.Id; }
       return (personId && tag) ? JF + '/Items/' + personId + '/Images/Primary?' + qs({ fillWidth: w || 180, quality: 85, tag: tag }) : '';
@@ -85,13 +107,60 @@ var Api = (function () {
     setPlayed: function (id, on) { return req(on ? 'POST' : 'DELETE', '/UserPlayedItems/' + id + '?' + qs({ userId: userId() })); },
     playbackInfo: function (id, opt) {
       opt = opt || {};
-      return req('POST', '/Items/' + id + '/PlaybackInfo?' + qs({ userId: userId(), AudioStreamIndex: opt.audio, SubtitleStreamIndex: opt.sub, MediaSourceId: opt.source, EnableDirectPlay: opt.noDirect ? false : undefined, AutoOpenLiveStream: true }), {
+      var maxBitrate = opt.maxBitrate || 16000000;
+      try { var sb = +localStorage.getItem('mltv.maxBitrate'); if (sb >= 2000000) maxBitrate = sb; } catch (e) {}
+      return req('POST', '/Items/' + id + '/PlaybackInfo?' + qs({
+        userId: userId(),
+        MaxStreamingBitrate: maxBitrate,
+        StartTimeTicks: opt.startTicks || 0,
+        AudioStreamIndex: opt.audio,
+        SubtitleStreamIndex: opt.sub,
+        MediaSourceId: opt.source,
+        EnableDirectPlay: opt.noDirect ? false : true,
+        EnableDirectStream: true,
+        EnableTranscoding: true,
+        AllowVideoStreamCopy: true,
+        AllowAudioStreamCopy: true,
+        AutoOpenLiveStream: true
+      }), {
         DeviceProfile: {
-          MaxStreamingBitrate: 40000000,
-          DirectPlayProfiles: [{ Type: 'Video', Container: 'mp4,mkv,ts,m4v', VideoCodec: 'h264,hevc', AudioCodec: 'aac,ac3,eac3,mp3' }],
-          TranscodingProfiles: [{ Type: 'Video', Container: 'ts', Protocol: 'hls', VideoCodec: 'h264', AudioCodec: 'aac', Context: 'Streaming', BreakOnNonKeyFrames: true }],
+          MaxStreamingBitrate: maxBitrate,
+          MaxStaticBitrate: maxBitrate,
+          MusicStreamingTranscodingBitrate: 192000,
+          DirectPlayProfiles: opt.noDirect ? [] : [
+            { Type: 'Video', Container: 'mp4,m4v', VideoCodec: 'h264', AudioCodec: 'aac,mp3' }
+          ],
+          TranscodingProfiles: [
+            {
+              Type: 'Video',
+              Container: 'ts',
+              Protocol: 'hls',
+              VideoCodec: 'h264',
+              AudioCodec: 'aac,mp3',
+              Context: 'Streaming',
+              MaxAudioChannels: '2',
+              MinSegments: 2,
+              SegmentLength: 3,
+              BreakOnNonKeyFrames: true
+            }
+          ],
           SubtitleProfiles: [{ Format: 'vtt', Method: 'External' }, { Format: 'srt', Method: 'External' }, { Format: 'ass', Method: 'Encode' }, { Format: 'pgssub', Method: 'Encode' }]
         }
+      });
+    },
+    mediaSegments: function (id) {
+      return Promise.all([
+        req('GET', '/MediaSegments/' + id + '?' + qs({ includeSegmentTypes: 'Intro,Recap,Commercial,Preview,Outro' })).catch(function () { return null; }),
+        req('GET', '/Episode/' + id + '/IntroTimestamps').catch(function () { return null; }),
+        req('GET', '/Episode/' + id + '/IntroSkipperSegments').catch(function () { return null; }),
+        req('GET', '/Items/' + id + '?' + qs({ userId: userId(), Fields: 'Chapters' })).catch(function () { return null; })
+      ]).then(function (res) {
+        return {
+          mediaSegments: res[0],
+          introTimestamps: res[1],
+          introSkipper: res[2],
+          chapters: (res[3] && res[3].Chapters) || []
+        };
       });
     },
     subtitleUrl: function (item, src, stream) {
@@ -102,12 +171,46 @@ var Api = (function () {
       if (src.TranscodingUrl) return JF + src.TranscodingUrl;
       return JF + '/Videos/' + item.Id + '/stream?' + qs({ static: true, mediaSourceId: src.Id, api_key: token() /* device-local only */ });
     },
+    submitRequest: function (item) {
+      var payload = {
+        mediaType: (item && item.Type === 'Series') ? 'tv' : 'movie',
+        title: (item && item.Name) || '',
+        year: (item && item.ProductionYear) || null,
+        platform: (item && item._platformName) || '',
+        requestedBy: get('userName') || userId() || 'MojaLoss TV'
+      };
+      return req('POST', '/MojaLoss/Requests', payload).catch(function () {
+        return { ok: true, localOnly: true };
+      });
+    },
     reportProgress: function (kind, body) { return req('POST', '/Sessions/Playing' + (kind ? '/' + kind : ''), body).catch(function () {}); },
     img: function (it, type, w) {
-      var id = it.Id, tag;
-      if (type === 'Backdrop') { tag = (it.BackdropImageTags || [])[0]; if (!tag && it.ParentBackdropItemId) { id = it.ParentBackdropItemId; tag = (it.ParentBackdropImageTags || [])[0]; } }
-      else { tag = (it.ImageTags || {})[type]; if (!tag && it.SeriesId && it.SeriesPrimaryImageTag) { id = it.SeriesId; tag = it.SeriesPrimaryImageTag; } }
-      return tag ? JF + '/Items/' + id + '/Images/' + type + '?' + qs({ fillWidth: w, quality: 85, tag: tag }) : '';
+      if (!it) return '';
+      var id = it.Id, tag, imgType = type || 'Primary';
+      if (imgType === 'Backdrop') {
+        tag = (it.BackdropImageTags || [])[0];
+        if (!tag && it.ParentBackdropItemId && (it.ParentBackdropImageTags || [])[0]) {
+          id = it.ParentBackdropItemId;
+          tag = it.ParentBackdropImageTags[0];
+        }
+        if (tag && id && !it._requestable) return JF + '/Items/' + id + '/Images/Backdrop?' + qs({ fillWidth: w || 1280, quality: 85, tag: tag });
+        if (it.ImageTags && it.ImageTags.Thumb && id && !it._requestable) return JF + '/Items/' + id + '/Images/Thumb?' + qs({ fillWidth: w || 720, quality: 85, tag: it.ImageTags.Thumb });
+        if (it._wpPoster || it._posterUrl) return it._wpPoster || it._posterUrl;
+        if (it.ImageTags && it.ImageTags.Primary && id && !it._requestable) return JF + '/Items/' + id + '/Images/Primary?' + qs({ fillWidth: w || 720, quality: 85, tag: it.ImageTags.Primary });
+        return '';
+      }
+      tag = (it.ImageTags || {})[imgType];
+      if (!tag && imgType === 'Primary' && it.SeriesId && it.SeriesPrimaryImageTag) {
+        id = it.SeriesId;
+        tag = it.SeriesPrimaryImageTag;
+      }
+      if (tag && id && !it._requestable) return JF + '/Items/' + id + '/Images/' + imgType + '?' + qs({ fillWidth: w || 260, quality: 85, tag: tag });
+      if (it._wpPoster || it._posterUrl) return it._wpPoster || it._posterUrl;
+      if (it.ImageTags && it.ImageTags.Thumb && id && !it._requestable) return JF + '/Items/' + id + '/Images/Thumb?' + qs({ fillWidth: w || 360, quality: 85, tag: it.ImageTags.Thumb });
+      if (it.ParentThumbItemId && it.ParentThumbImageTag && !it._requestable) return JF + '/Items/' + it.ParentThumbItemId + '/Images/Thumb?' + qs({ fillWidth: w || 360, quality: 85, tag: it.ParentThumbImageTag });
+      if ((it.BackdropImageTags || [])[0] && id && !it._requestable) return JF + '/Items/' + id + '/Images/Backdrop?' + qs({ fillWidth: w || 360, quality: 85, tag: it.BackdropImageTags[0] });
+      if (it.ParentBackdropItemId && (it.ParentBackdropImageTags || [])[0] && !it._requestable) return JF + '/Items/' + it.ParentBackdropItemId + '/Images/Backdrop?' + qs({ fillWidth: w || 360, quality: 85, tag: it.ParentBackdropImageTags[0] });
+      return '';
     },
     // Platforms & Regional categories: public WordPress categories (no auth). Shown only if the site lists posts AND they match this library.
     platforms: function () {
@@ -123,6 +226,9 @@ var Api = (function () {
         var tv = cats.filter(function (c) { return c.slug === 'tv-shows' && c.parent === 0; })[0];
         var list = cats.filter(function (c) { return c.parent === 0 && PLATFORM_SLUGS.indexOf(c.slug) >= 0 && c.count >= 1; })
           .sort(function (a, b) { return b.count - a.count; });
+        if (!list.some(function (c) { return c.slug === 'imdb'; })) {
+          list.push({ id: 'imdb', name: 'IMDb', slug: 'imdb', count: 250, parent: 0 });
+        }
         var regionals = [];
         REGIONAL_SPECS.forEach(function (spec) {
           var found = cats.filter(function (c) { return c.slug === spec.slug && c.count >= 1; })[0];
@@ -190,13 +296,38 @@ var Api = (function () {
       });
     },
     platformTitles: function (platformId) {
-      return timed(fetch(WP + 'posts?' + qs({ categories: platformId, per_page: 50, orderby: 'date', order: 'desc', _fields: 'id,title' })), 8000).then(function (r) { return r.json(); })
+      if (platformId === 'imdb' || !platformId) return Promise.resolve([]);
+      return timed(fetch(WP + 'posts?' + qs({ categories: platformId, per_page: 100, orderby: 'date', order: 'desc', _fields: 'id,date,title,categories,class_list,jetpack_featured_media_url,excerpt' })), 8000).then(function (r) { return r.json(); })
         .then(function (posts) {
           if (!Array.isArray(posts)) return [];
           return posts.map(function (p) {
-            var t = (new DOMParser().parseFromString((p.title && p.title.rendered) || '', 'text/html').body.textContent || '').trim();
-            var m = /\s*\((\d{4})(?:[-–\u2013]\s*\d{0,4})?\)\s*$/.exec(t);
-            return { name: m ? t.slice(0, m.index).trim() : t, year: m ? +m[1] : null };
+            var doc = new DOMParser().parseFromString((p.title && p.title.rendered) || '', 'text/html');
+            var t = (doc.body.textContent || '').trim();
+            var m = /\s*\((\d{4})(?:\s*[-–\u2013]\s*(\d{0,4}))?\)\s*$/.exec(t);
+            var isDashRange = /\(\d{4}\s*[-–\u2013]/.test(t);
+            var isOngoing = /\(\d{4}\s*[-–\u2013]\s*\)\s*$/.test(t);
+            var isTvClass = (p.class_list && p.class_list.indexOf('category-tv-shows') >= 0) || (p.categories && p.categories.indexOf(1470) >= 0) || (p.categories && p.categories.indexOf(1) >= 0) || isDashRange;
+            var yr = m ? +m[1] : null;
+            if (yr && (yr < 1888 || yr > 2030)) yr = null;
+            var yrEnd = (m && m[2]) ? +m[2] : null;
+            var postYear = p.date ? parseInt(String(p.date).slice(0, 4), 10) : null;
+            var exText = '';
+            if (p.excerpt && p.excerpt.rendered) {
+              var exDoc = new DOMParser().parseFromString(p.excerpt.rendered, 'text/html');
+              exText = (exDoc.body.textContent || '').replace(/Latest:[\s\S]*$/i, '').replace(/Download[\s\S]*$/i, '').trim();
+            }
+            return {
+              id: p.id,
+              date: p.date || '',
+              postYear: (postYear && postYear >= 2000 && postYear <= 2030) ? postYear : null,
+              name: m ? t.slice(0, m.index).trim() : t,
+              year: yr,
+              yearEnd: yrEnd,
+              isOngoing: isOngoing,
+              kind: isTvClass ? 'Series' : 'Movie',
+              poster: p.jetpack_featured_media_url || '',
+              overview: exText
+            };
           }).filter(function (p) { return p.name; });
         });
     }

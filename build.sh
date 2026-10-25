@@ -34,7 +34,7 @@ bundle = {
     "versionCode": vcode,
     "sha256": sha,
     "releasedAt": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    "notes": f"v{ver}: Full-screen 1080p viewport scaling, fixed Regional shelf scrolling, clutter-free Detail stage, and Sage shimmer loading skeletons",
+    "notes": f"v{ver}: Split Search with Top Searches & requestable catalog, Popular Movies & Series of All Time on Home, IMDb Hub, 20-card See All rule, 5-card row scroll, and 0ms Back restore",
     "css": s,
     "js": js_bundle,
     "logos": logos_obj

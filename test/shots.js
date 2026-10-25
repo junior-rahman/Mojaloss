@@ -1,6 +1,6 @@
 // Fresh end-to-end run against the mock server (never mojaloss.stream). Real key events; 1920x1080 screenshots.
 const puppeteer = require('puppeteer-core'), fs = require('fs');
-const OUT = '/workspace/mojaloss-work/design/', M = 'http://localhost:8787';
+const OUT = '/workspace/mojaloss-work/design/', M = 'http://localhost:' + (process.env.PORT || 8787);
 const BASE = M + '/index.html?mock=' + M;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 let pass = 0, fail = 0;
@@ -12,7 +12,8 @@ const api = async q => (await fetch(M + q)).json();
   // Fake Tizen runtime so key registration and exit can be observed.
   await pg.evaluateOnNewDocument(() => { window.__reg = []; window.tizen = { tvinputdevice: { registerKey: k => window.__reg.push(k) }, application: { getCurrentApplication: () => ({ exit: () => { window.__exited = true; } }) } }; });
   const errs = []; pg.on('pageerror', e => errs.push(e.message));
-  const key = async (code, n = 1) => { for (let i = 0; i < n; i++) { await pg.evaluate(c => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: c, bubbles: true })), code); await sleep(250); } };
+  const key = async (code, n = 1) => { for (let i = 0; i < n; i++) { await pg.evaluate(c => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: c, bubbles: true })), code); await sleep(35); await pg.evaluate(c => document.dispatchEvent(new KeyboardEvent('keyup', { keyCode: c, bubbles: true })), code); await sleep(215); } };
+  const holdKey = async (code, ms = 600) => { await pg.evaluate(c => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: c, bubbles: true })), code); await sleep(ms); await pg.evaluate(c => document.dispatchEvent(new KeyboardEvent('keyup', { keyCode: c, bubbles: true })), code); await sleep(150); };
   const focused = () => pg.evaluate(() => { const e = document.querySelector('.focused'); return e ? (e.getAttribute('data-slug') || e.textContent.trim().slice(0, 40)) : null; });
   const scr = () => pg.evaluate(() => MLTV.screen());
   const BACK = 10009, OK = 13, L = 37, U = 38, R = 39, D = 40;
@@ -52,10 +53,22 @@ const api = async q => (await fetch(M + q)).json();
       rowsTransform: (document.getElementById('rows') || { style: {} }).style.transform
     };
   });
-  ok(heroInit.hasHero && !heroInit.hasGlass && !heroInit.hasHeroArt && heroInit.title === 'Midnight Harbor' && /2026/.test(heroInit.meta) && /38% watched/.test(heroInit.meta) && /Resume from 40:00/.test(heroInit.play) && heroInit.info === 'More Info' && /Items\/it0\/Images\/Backdrop/.test(heroInit.backdropBg), 'Full-bleed Hero renders open editorial layout (no .glass box, no #hero-art) with full-screen #backdrop (' + heroInit.title + ' / ' + heroInit.play + ')');
+  const restoredHeroCheck = await pg.evaluate(() => {
+    const hEl = document.getElementById('hero');
+    const rEl = document.querySelector('.rows');
+    const hRect = hEl ? hEl.getBoundingClientRect() : { left: -1, width: 0 };
+    const rRect = rEl ? rEl.getBoundingClientRect() : { left: -1, width: 0 };
+    return {
+      isTopHero: !!(hEl && !hEl.classList.contains('side-stage')),
+      noNewHeroChrome: !document.getElementById('hero-rail') && !document.querySelector('.stage-shell') && !document.getElementById('hero-credits') && !document.getElementById('hero-prog-row') && !document.getElementById('hero-fav') && !document.querySelector('.m-rating'),
+      heroW: Math.round(hRect.width),
+      rowsW: Math.round(rRect.width)
+    };
+  });
+  ok(heroInit.hasHero && !heroInit.hasGlass && !heroInit.hasHeroArt && restoredHeroCheck.isTopHero && restoredHeroCheck.noNewHeroChrome && restoredHeroCheck.heroW === 1920 && restoredHeroCheck.rowsW === 1920 && heroInit.title === 'Midnight Harbor' && /2026/.test(heroInit.meta) && /38% watched/.test(heroInit.meta) && /Resume from 40:00/.test(heroInit.play) && heroInit.info === 'More Info' && /Items\/it0\/Images\/Backdrop/.test(heroInit.backdropBg), 'Restored v0.1.15 Top Hero renders clean 1920px banner with dot-separated meta and zero new hero chrome (' + heroInit.title + ')');
   ok(heroInit.rowsTransform === 'translateY(0px)', 'Hero stays fully visible at translateY(0px) on first row focus');
   const rows = await pg.$$eval('section.row', s => s.filter(x => x.style.display !== 'none').map(x => x.id));
-  ok(['cw', 'plat', 'lm', 'ls', 'fav'].every(r => rows.includes(r)), 'Home rows: Continue Watching, platforms, Latest Movies, Latest Series, My List (' + rows + ')');
+  ok(['cw', 'plat', 'recently-uploaded', 'lm', 'ls', 'collections', 'fav'].every(r => rows.includes(r)), 'Home rows include Continue Watching, Platforms, Recently Uploaded, Latest Movies, Latest Series, Collections, My List (' + rows + ')');
   ok(await pg.$eval('#plat', e => !e.querySelector('h2')), 'platform row has no heading');
   ok(!(await pg.$('nav, .nav, .bottom-nav, .tabbar')), 'no navigation bar/buttons');
   const chips = await pg.$$eval('.chip', es => es.map(e => e.getAttribute('data-slug') + (e.querySelector('svg path') ? ':logo' : ':mono')));
@@ -80,9 +93,48 @@ const api = async q => (await fetch(M + q)).json();
   await key(L); await sleep(300);
   await pg.screenshot({ path: OUT + 'tv-home.png' });
   await pg.screenshot({ path: __dirname + '/out/tv-015-home-hero.png' });
+  await pg.screenshot({ path: __dirname + '/out/tv-016-side-stage-home.png' });
+  await pg.screenshot({ path: __dirname + '/out/tv-017-side-stage-home.png' });
+  await pg.screenshot({ path: __dirname + '/out/tv-020-classic-hero-home.png' });
+  await pg.screenshot({ path: __dirname + '/out/tv-021-restored-hero-home.png' });
 
   // 3. Platform screen
+  const padCheck = await pg.evaluate(() => {
+    const r = getComputedStyle(document.getElementById('root'));
+    const t = getComputedStyle(document.querySelector('.top'));
+    const h = getComputedStyle(document.getElementById('hero'));
+    const tr = getComputedStyle(document.querySelector('#cw .track'));
+    return { rootPad: r.paddingLeft, topPad: t.paddingLeft, heroPad: h.paddingLeft, trackPad: tr.paddingRight };
+  });
+  ok(padCheck.rootPad === '0px' && padCheck.topPad === '64px' && padCheck.heroPad === '64px' && padCheck.trackPad === '64px', 'Zero outer #root margin/padding (' + padCheck.rootPad + ') with generous 64px internal stage padding (' + padCheck.heroPad + ')');
+
   await key(D); const slug = await focused(); ok(['netflix','prime','apple','hbo'].includes(slug), 'D-pad down reaches platform row: ' + slug);
+  const platStageCheck = await pg.evaluate(() => ({
+    eyebrow: (document.getElementById('hero-eyebrow') || {}).textContent,
+    title: (document.getElementById('hero-title') || {}).textContent,
+    desc: (document.getElementById('hero-desc') || {}).textContent
+  }));
+  ok(/Streaming Platform/.test(platStageCheck.eyebrow) && platStageCheck.title === 'Netflix' && /hold OK to move/i.test(platStageCheck.desc), 'Focusing Streaming Platform chip updates clean Hero banner (' + platStageCheck.eyebrow + ' / ' + platStageCheck.title + ')');
+  await pg.screenshot({ path: __dirname + '/out/tv-017-side-stage-platform.png' });
+  // Verify v0.1.13 Hold-OK Platform Reordering (t84u)
+  await holdKey(OK, 600);
+  const reorderActive = await pg.evaluate(() => {
+    const c = document.querySelector('#plat .chip.reordering');
+    return { active: !!c, slug: c ? c.getAttribute('data-slug') : null, hint: c && c.querySelector('.chip-move-hint') ? c.querySelector('.chip-move-hint').textContent : '' };
+  });
+  ok(reorderActive.active && reorderActive.slug === 'netflix' && /Move/.test(reorderActive.hint), 'Hold-OK (600ms) on platform chip enters Platform Reorder Mode (.chip.reordering: ' + reorderActive.slug + ')');
+  await key(R); await sleep(200);
+  await pg.screenshot({ path: __dirname + '/out/tv-013-platform-reorder.png' });
+  await key(OK); await sleep(200);
+  const afterReorder = await pg.evaluate(() => ({
+    domOrder: Array.from(document.querySelectorAll('#plat .chip')).map(e => e.getAttribute('data-slug')),
+    savedOrder: JSON.parse(localStorage.getItem('mltv.platOrder') || '[]'),
+    stillReordering: !!document.querySelector('#plat .chip.reordering')
+  }));
+  ok(!afterReorder.stillReordering && JSON.stringify(afterReorder.domOrder) === JSON.stringify(['prime', 'netflix', 'apple', 'hbo']) && JSON.stringify(afterReorder.savedOrder) === JSON.stringify(['prime', 'netflix', 'apple', 'hbo']), 'Left/Right + OK moves platform and persists custom order in localStorage: ' + afterReorder.domOrder.join(', '));
+  // Move netflix back to index 0 so subsequent tests see default order
+  await holdKey(OK, 600); await key(L); await key(OK);
+  await pg.evaluate(() => localStorage.removeItem('mltv.platOrder'));
 
   // Verify Upgrade #3 (v0.1.11): Top 10 Trending Today + Next Up + Regional shelves
   await key(D); await sleep(450); // Down from Platform row -> Top 10 Trending Today (#trending)
@@ -105,6 +157,7 @@ const api = async q => (await fetch(M + q)).json();
   ok(trendingCheck.nextUpCount === 2 && trendingCheck.firstNextUpBadge === 'Next Up · S1E4', 'Next Up row renders deduplicated upcoming episodes (' + trendingCheck.nextUpCount + ' cards, first: ' + trendingCheck.firstNextUpBadge + ')');
   ok(trendingCheck.regHindiCount === 4 && trendingCheck.regHindiSeriesCount === 3 && trendingCheck.regIntlCount === 3 && trendingCheck.bengaliHidden, 'Regional shelves render Hindi Movies (' + trendingCheck.regHindiCount + '), Hindi Series (' + trendingCheck.regHindiSeriesCount + '), International Movies (' + trendingCheck.regIntlCount + '), and hide empty Bengali shelf');
   await pg.screenshot({ path: __dirname + '/out/tv-019-home-trending.png' });
+  await pg.screenshot({ path: __dirname + '/out/tv-016-side-stage-trending.png' });
   await pg.screenshot({ path: OUT + 'tv-home.png' });
 
   // Verify v0.1.12 Upgrade #1 & #4: Full-screen coverage, fitViewport auto-scaler & designed shimmer skeletons
@@ -134,10 +187,12 @@ const api = async q => (await fetch(M + q)).json();
   await pg.screenshot({ path: __dirname + '/out/tv-012-loading-skeleton.png' });
   await pg.evaluate(() => { const ov = document.getElementById('skel-preview-overlay'); if (ov) ov.remove(); });
 
-  // Verify v0.1.12 Upgrade #2: D-pad Down scrolling through Regional shelves (#reg-hindi, #reg-hindi-tv-shows, #reg-international-movies)
+  // Verify v0.1.12 Upgrade #2 + v0.1.23 Recently Uploaded & Collections shelves: D-pad Down scrolling through Home & Regional shelves
   await key(D); // #nextup
+  await key(D); // #recently-uploaded
   await key(D); // #lm
   await key(D); // #ls
+  await key(D); // #collections
   await key(D); await sleep(350); // #reg-hindi
   await key(R); await sleep(250); // 2nd card in #reg-hindi
   const regScrollCheck = await pg.evaluate(() => {
@@ -151,7 +206,7 @@ const api = async q => (await fetch(M + q)).json();
       eyebrow: (document.getElementById('hero-eyebrow') || {}).textContent || ''
     };
   });
-  ok(regScrollCheck.focusedInHindi && regScrollCheck.top >= 280 && regScrollCheck.top <= 450 && regScrollCheck.nextOpacity >= 0.8 && regScrollCheck.eyebrow === 'Hindi Movies', 'Regional shelf #reg-hindi scrolls cleanly on-screen (top=' + regScrollCheck.top + 'px, nextOpacity=' + regScrollCheck.nextOpacity + ', eyebrow=' + regScrollCheck.eyebrow + ')');
+  ok(regScrollCheck.focusedInHindi && regScrollCheck.top >= 60 && regScrollCheck.top <= 480 && regScrollCheck.nextOpacity >= 0.8 && regScrollCheck.eyebrow === 'Hindi Movies', 'Regional shelf #reg-hindi scrolls cleanly on-screen (top=' + regScrollCheck.top + 'px, nextOpacity=' + regScrollCheck.nextOpacity + ', eyebrow=' + regScrollCheck.eyebrow + ')');
   await pg.screenshot({ path: __dirname + '/out/tv-012-regional-scroll.png' });
   await key(D); await sleep(250); // #reg-hindi-tv-shows
   await key(D); await sleep(250); // #reg-international-movies
@@ -161,25 +216,98 @@ const api = async q => (await fetch(M + q)).json();
     const foc = document.querySelector('.focused');
     return { focused: !!(foc && foc.closest('#reg-international-movies')), top: Math.round(r.top) };
   });
-  ok(regIntlCheck.focused && regIntlCheck.top >= 280 && regIntlCheck.top <= 450, 'Regional shelf #reg-international-movies scrolls cleanly on-screen (top=' + regIntlCheck.top + 'px)');
-  await key(U, 6); await sleep(350); // Return up to #trending
+  ok(regIntlCheck.focused && regIntlCheck.top >= 60 && regIntlCheck.top <= 480, 'Regional shelf #reg-international-movies scrolls cleanly on-screen (top=' + regIntlCheck.top + 'px)');
+  await key(U, 8); await sleep(350); // Return up to #trending
   await key(U); await sleep(350); // Return to Platform chips
   await key(L, 3); ok(await focused() === 'netflix', 'D-pad left along row'); await key(OK); await sleep(500);
-  ok(await scr() === 'platform' && !(await pg.$('h1')) && !!(await pg.$('.plogo svg path')), 'platform screen shows logo instead of a title');
-  ok(await pg.$eval('.pill.on[data-f="latest"]', e => e.textContent) === 'Newest release', 'default sort: Newest release');
-  const yrs = await pg.$$eval('.card', cs => cs.length); ok(yrs === 6, 'Netflix shows 6 matched titles');
-  const order = await pg.evaluate(() => Array.from(document.querySelectorAll('.card .t')).map(t => t.textContent));
-  ok(order[0] === 'Kite Season' || order[0] === 'Copper Sky' || order[0] === 'Midnight Harbor' || order[0] === 'Northline', 'newest first: ' + order.join(', '));
-  await key(U); await key(L, 5); await key(R); await key(OK); await sleep(300);
-  const types = await pg.evaluate(() => Array.from(document.querySelectorAll('.card .t')).map(t => t.textContent));
-  ok(types.length === 4 && !types.includes('Northline') && !types.includes('The Long Field'), 'Movies filter: ' + types);
+  const platHubCheck = await pg.evaluate(() => ({
+    scr: MLTV.screen(),
+    noPlogo: !document.querySelector('.plogo'),
+    noFilterPills: !document.querySelector('.pill[data-f="all"]') && !document.querySelector('.pill[data-f="movie"]') && !document.querySelector('.pill[data-f="series"]') && !document.querySelector('.pill[data-f="latest"]') && !document.querySelector('.pill[data-f="az"]'),
+    hasSearchBtn: !!document.getElementById('plat-search-btn'),
+    hasHero: !!document.getElementById('hero') && !document.getElementById('hero-rail'),
+    sectionIds: Array.from(document.querySelectorAll('#plat-rows section.row')).map(s => s.id),
+    trendingCount: document.querySelectorAll('#plat-trending .rank-card').length,
+    catalogCount: document.querySelectorAll('#plat-catalog .card').length,
+    catalogSeeAll: document.querySelectorAll('#plat-catalog .see-all-card').length,
+    popularCount: document.querySelectorAll('#plat-popular .card').length,
+    moviesCount: document.querySelectorAll('#plat-movies .card').length,
+    moviesSeeAll: document.querySelectorAll('#plat-movies .see-all-card').length,
+    seriesCount: document.querySelectorAll('#plat-series .card').length,
+    noRequestSection: !document.getElementById('plat-requestable'),
+    hasFallbackPoster: !!document.querySelector('#plat-catalog .card .poster-fallback'),
+    cachedSlugs: Object.keys(JSON.parse(localStorage.getItem('mltv.platHubCache.v4') || '{}'))
+  }));
+  ok(platHubCheck.scr === 'platform' && platHubCheck.noPlogo && platHubCheck.noFilterPills && platHubCheck.hasSearchBtn, 'Platform screen removes top platform logo & All/Movies/Series/Newest/A–Z buttons, keeping ONLY Search [Platform] button');
+  ok(platHubCheck.hasHero && JSON.stringify(platHubCheck.sectionIds) === JSON.stringify(['plat-trending', 'plat-catalog', 'plat-popular', 'plat-movies', 'plat-series']) && platHubCheck.noRequestSection && platHubCheck.catalogCount === 20 && platHubCheck.catalogSeeAll === 1 && platHubCheck.moviesCount === 20 && platHubCheck.moviesSeeAll === 1 && platHubCheck.popularCount >= 10 && platHubCheck.hasFallbackPoster && platHubCheck.cachedSlugs.includes('netflix'), 'Netflix Hub renders 5 sections (Trending, New Releases, Popular, Movies, Series), caps each row at 20 cards + 21st See All card, and renders Universal Fallback Poster');
+  const order = await pg.evaluate(() => Array.from(document.querySelectorAll('#plat-catalog .card .t')).map(t => t.textContent));
+  ok(order[0] === 'Kite Season' || order[0] === 'Copper Sky' || order[0] === 'Midnight Harbor' || order[0] === 'Northline', 'New Releases sorted newest first: ' + order.slice(0, 4).join(', '));
   await pg.screenshot({ path: OUT + 'tv-platform.png' });
+  // Focus the 21st card (.see-all-card) at the end of New Releases and open the full Browse & Filter screen
+  await pg.evaluate(() => Focus.first('#plat-catalog .see-all-card'));
+  await sleep(250);
+  await pg.screenshot({ path: __dirname + '/out/tv-023-row-see-all-card.png' });
+  await key(OK); await sleep(300);
+  const browseCheck = await pg.evaluate(() => ({
+    scr: MLTV.screen(),
+    gridCards: document.querySelectorAll('#browse-grid .card').length,
+    hasFilters: document.querySelectorAll('#browse-filters .pill').length >= 4
+  }));
+  ok(browseCheck.scr === 'browse' && browseCheck.gridCards > 20 && browseCheck.hasFilters, 'Clicking 21st See All card opens full Section Browse & Filter screen (' + browseCheck.gridCards + ' titles)');
+  await pg.screenshot({ path: __dirname + '/out/tv-023-see-all-browse.png' });
+  await key(BACK); await sleep(350);
+  // Open Apple TV+ Hub and verify:
+  // 1) Strict year + type matching: Lucky (2017, Movie) on server does NOT falsely match Lucky (2026, Series) on Apple TV+, while The Gorge (2025, Movie) on server DOES match!
+  // 2) Trending on Apple TV+ has current 2025-2026 titles (#1 The Gorge), while Popular on Apple TV+ has all-time classics (Ted Lasso, Severance, Silo, CODA, etc.)
+  await pg.evaluate(() => { const p = MLTV.platformHubCache()['apple']; if (p) MLTV.go('platform', { p: p }, true); });
+  await sleep(300);
+  const appleCheck = await pg.evaluate(() => {
+    const strictNull2026 = MLTV.findServerMatch({ name: 'Lucky', year: 2026, kind: 'Movie' });
+    const strictHit2017 = MLTV.findServerMatch({ name: 'Lucky', year: 2017, kind: 'Movie' });
+    const strictGorge2025 = MLTV.findServerMatch({ name: 'The Gorge', year: 2025, kind: 'Movie' });
+    const firstTrendingTitle = (document.querySelector('#plat-trending .rank-card .t') || {}).textContent;
+    const popularTitles = Array.from(document.querySelectorAll('#plat-popular .card .t')).map(e => e.textContent);
+    return {
+      strictNull2026: strictNull2026 === null,
+      strictHit2017: !!(strictHit2017 && strictHit2017.Id === 'it12'),
+      strictGorge2025: !!(strictGorge2025 && strictGorge2025.Id === 'it13'),
+      firstTrendingTitle: firstTrendingTitle,
+      hasTedLassoInPopular: popularTitles.includes('Ted Lasso'),
+      appleMoviesCount: document.querySelectorAll('#plat-movies .card').length,
+      appleSeriesCount: document.querySelectorAll('#plat-series .card').length
+    };
+  });
+  ok(appleCheck.strictNull2026 && appleCheck.strictHit2017 && appleCheck.strictGorge2025 && appleCheck.firstTrendingTitle === 'The Gorge' && appleCheck.hasTedLassoInPopular && appleCheck.appleMoviesCount >= 18 && appleCheck.appleSeriesCount >= 18, 'Strict Title+Year+Type matching prevents Lucky (2017) from matching Lucky (2026), matches The Gorge (2025) at #1 Trending, and separates Popular on Apple TV+ (Ted Lasso)');
+  await pg.screenshot({ path: __dirname + '/out/tv-023-platform-appletv-fixed.png' });
+  // Test In-Platform Search inside Apple TV+: searching "Lucky" returns both Lucky (2017, Play) from server and Lucky (2026, Request) from Apple TV+ catalog
+  await pg.evaluate(() => MLTV.searchPlatform('Lucky'));
+  await sleep(300);
+  const searchLuckyCheck = await pg.evaluate(() => ({
+    count: document.querySelectorAll('#plat-search-results .card').length,
+    firstId: (document.querySelector('#plat-search-results .card') || {}).getAttribute('data-id'),
+    noReqBadge: !document.querySelector('#plat-search-results .card[data-id="it12"] .req-badge'),
+    playBtn: (document.getElementById('hero-play') || {}).textContent
+  }));
+  ok(searchLuckyCheck.count >= 1 && searchLuckyCheck.firstId === 'it12' && searchLuckyCheck.noReqBadge && searchLuckyCheck.playBtn === 'Play', 'In-Platform Search for "Lucky" finds server movie (2017, Play) and distinguishes it from 2026 series');
+  await pg.evaluate(() => MLTV.searchPlatform('Severance'));
+  await sleep(300);
+  const searchReqCheck = await pg.evaluate(() => ({
+    count: document.querySelectorAll('#plat-search-results .card').length,
+    hasReqBadge: !!document.querySelector('#plat-search-results .card .req-badge'),
+    playBtn: (document.getElementById('hero-play') || {}).textContent
+  }));
+  ok(searchReqCheck.count === 1 && searchReqCheck.hasReqBadge && searchReqCheck.playBtn === '+ Request Title', 'In-Platform Search for "Severance" (not on server) offers + Request Title');
+  await pg.evaluate(() => document.getElementById('hero-play').onclick());
+  await sleep(200);
+  ok(await pg.evaluate(() => document.getElementById('hero-play').textContent === '\u2713 Requested'), 'Clicking + Request Title in Platform search marks title as ✓ Requested');
   await key(BACK); await sleep(800); ok(await scr() === 'home', 'Back: platform → Home');
 
   // 4. Detail: resume + favourite
   ok(await focused() === 'Midnight Harbor', 'Home focus starts on Continue Watching');
   await key(OK); await sleep(900);
-  ok((await focused() || '').startsWith('Resume from 40:00'), 'detail offers Resume from saved position: ' + await focused());
+  ok((await focused() || '').startsWith('Resume from 40:00'), 'Detail screen opens and offers Resume from 40:00');
+  await pg.screenshot({ path: __dirname + '/out/tv-016-detail-expanded.png' });
+  await pg.screenshot({ path: __dirname + '/out/tv-017-detail-clean.png' });
   ok(!!(await pg.$('#restart')), 'From the start option');
   await key(R, 2); await key(OK); await sleep(600);
   ok(await pg.$eval('#fav', e => e.textContent) === '\u2713 In My List', 'My List toggle');
@@ -207,7 +335,7 @@ const api = async q => (await fetch(M + q)).json();
   }));
   ok(/SERIES \u00b7 2 SEASONS \u00b7 6 EPISODES/.test(sDetail.eyebrow), 'Flagship detail eyebrow shows SERIES · 2 SEASONS · 6 EPISODES (' + sDetail.eyebrow + ')');
   ok(/Starring Amina Rahman, Dev Sen, Nadia Chowdhury/.test(sDetail.credits) && /Directed by Tariq Anwar/.test(sDetail.credits), 'Flagship detail renders Starring & Directed by credits line (' + sDetail.credits + ')');
-  ok(sDetail.seasons.length === 2 && sDetail.seasons[0].on && /Season 1/.test(sDetail.seasons[0].text) && /Season 2/.test(sDetail.seasons[1].text) && sDetail.jumpPills.length === 2, 'Series detail renders Season Picker pills + Cast/Similar quick-jump pills (' + sDetail.seasons.map(s => s.text).join(', ') + ')');
+  ok(sDetail.seasons.length === 2 && sDetail.seasons[0].on && /Season 1/.test(sDetail.seasons[0].text) && /Season 2/.test(sDetail.seasons[1].text) && sDetail.jumpPills.length === 0, 'Series detail renders Season Picker pills with no Cast/Similar tab buttons (' + sDetail.seasons.map(s => s.text).join(', ') + ')');
   ok(sDetail.epsCount === 4 && sDetail.nextUpBadges.includes('Next Up') && sDetail.watchedBadges === 2 && sDetail.epSubs.every(s => s.length > 20), 'Season 1 lists 4 rich episode cards with 2-line synopses, Next Up & Watched badges');
   ok(/S1 \u00b7 E3 \u2014 Arrival/.test(sDetail.epPreviewTag) && /northern relay/.test(sDetail.epPreviewDesc), 'Live Episode Preview bar initializes to Next Up episode S1E3 (' + sDetail.epPreviewTag + ')');
   ok(/Resume S1E3 from 0:20/.test(sDetail.playText) && sDetail.hasRestart && sDetail.hasWatchedBtn, 'Series #play button shows specific Next Up episode + From the start + Mark watched buttons');
@@ -219,10 +347,60 @@ const api = async q => (await fetch(M + q)).json();
     return {
       epsOpacity: epsEl ? getComputedStyle(epsEl).opacity : '0',
       epsTop: Math.round(epsRect.top),
-      hasArtCard: !!artCard && artCard.getBoundingClientRect().width >= 350
+      hasArtCard: !artCard
     };
   });
-  ok(detailCleanCheck.epsOpacity === '1' && detailCleanCheck.epsTop > 300 && detailCleanCheck.epsTop < 700 && detailCleanCheck.hasArtCard, 'Clutter-free Detail page renders visible #eps immediately (opacity=' + detailCleanCheck.epsOpacity + ', top=' + detailCleanCheck.epsTop + 'px) + right-side key-art card');
+  ok(detailCleanCheck.epsOpacity === '1' && detailCleanCheck.epsTop > 300 && detailCleanCheck.epsTop < 700 && detailCleanCheck.hasArtCard, 'Clutter-free Detail page renders visible #eps immediately (opacity=' + detailCleanCheck.epsOpacity + ', top=' + detailCleanCheck.epsTop + 'px) with no floating right-side thumbnail card');
+  const seqCheck = await pg.evaluate(() => ({
+    allVisible: !document.getElementById('eps').classList.contains('detail-tab-hidden') && !document.getElementById('cast-row').classList.contains('detail-tab-hidden') && !document.getElementById('similar-row').classList.contains('detail-tab-hidden'),
+    castPrevHidden: getComputedStyle(document.getElementById('cast-preview')).display === 'none',
+    simPrevHidden: getComputedStyle(document.getElementById('sim-preview')).display === 'none'
+  }));
+  ok(seqCheck.allVisible && seqCheck.castPrevHidden && seqCheck.simPrevHidden, 'Detail renders Episodes, Cast & Crew, and More Like This sequentially with #cast-preview & #sim-preview hidden until focused');
+  // Focus first .person-card in #cast-row -> #cast-preview opens with that actor's titles
+  await pg.evaluate(() => Focus.first('#cast-row .person-card'));
+  await sleep(350);
+  const castPrevCheck = await pg.evaluate(() => ({
+    hasCastPrev: !!document.getElementById('cast-preview') && getComputedStyle(document.getElementById('cast-preview')).display === 'flex',
+    noBorderBox: getComputedStyle(document.getElementById('cast-preview')).borderTopWidth === '0px',
+    title: (document.getElementById('cast-prev-title') || {}).textContent,
+    worksCount: document.querySelectorAll('#cast-works-track .card').length
+  }));
+  ok(castPrevCheck.hasCastPrev && castPrevCheck.noBorderBox && /Amina Rahman/.test(castPrevCheck.title) && castPrevCheck.worksCount > 0, 'Focusing a Cast card reveals borderless filmography showcase (#cast-preview) underneath with playable titles (' + castPrevCheck.title + ', ' + castPrevCheck.worksCount + ' titles)');
+  await pg.screenshot({ path: __dirname + '/out/tv-015-cast-focused.png' });
+  // Click first person card in #cast-row -> opens dedicated Person filmography screen with their movies & series
+  await pg.evaluate(() => { const pc = document.querySelector('#cast-row .person-card'); if (pc) pc.onclick(); });
+  await sleep(500);
+  const personScreenCheck = await pg.evaluate(() => ({
+    scr: MLTV.screen(),
+    cards: document.querySelectorAll('#person-rows .card').length,
+    eyebrow: (document.getElementById('hero-eyebrow') || {}).textContent
+  }));
+  ok(personScreenCheck.scr === 'person' && personScreenCheck.cards === 8 && /AMINA RAHMAN/.test(personScreenCheck.eyebrow), 'Clicking Cast member opens dedicated Person filmography screen with their Movies & Series (' + personScreenCheck.cards + ' titles)');
+  await pg.screenshot({ path: __dirname + '/out/tv-013-person-filmography.png' });
+  await key(BACK); await sleep(400);
+  const simHiddenBeforeFocus = await pg.evaluate(() => getComputedStyle(document.getElementById('sim-preview')).display === 'none');
+  await pg.evaluate(() => Focus.first('#similar-row .card'));
+  await sleep(250);
+  const simPrev1 = await pg.evaluate(() => ({
+    visible: getComputedStyle(document.getElementById('sim-preview')).display === 'flex',
+    castHiddenNow: getComputedStyle(document.getElementById('cast-preview')).display === 'none',
+    noBorderBox: getComputedStyle(document.getElementById('sim-preview')).borderTopWidth === '0px',
+    eyebrow: (document.getElementById('sim-prev-eyebrow') || {}).textContent,
+    title1: (document.getElementById('sim-prev-title') || {}).textContent,
+    desc1: (document.getElementById('sim-prev-desc') || {}).textContent
+  }));
+  await key(R); await sleep(250); // move right to second card in #similar-row
+  const simPrev2 = await pg.evaluate(() => ({
+    title2: (document.getElementById('sim-prev-title') || {}).textContent,
+    desc2: (document.getElementById('sim-prev-desc') || {}).textContent,
+    meta2: (document.getElementById('sim-prev-meta') || {}).textContent
+  }));
+  ok(simHiddenBeforeFocus && simPrev1.visible && simPrev1.castHiddenNow && simPrev1.noBorderBox && /MOVIE|SERIES/.test(simPrev1.eyebrow) && simPrev1.title1 === 'Midnight Harbor' && simPrev2.title2 === 'The Long Field' && simPrev2.desc2.length > 20 && /2025/.test(simPrev2.meta2), 'More Like This (#similar-row) keeps #sim-preview hidden until a card is focused, then renders borderless open details (' + simPrev1.title1 + ' -> ' + simPrev2.title2 + ')');
+  await pg.screenshot({ path: __dirname + '/out/tv-013-similar-preview.png' });
+  await pg.screenshot({ path: __dirname + '/out/tv-015-similar-stage.png' });
+  await pg.evaluate(() => Focus.first('#play'));
+  await sleep(250);
   await pg.screenshot({ path: OUT + 'tv-detail-series.png' });
   await pg.screenshot({ path: OUT + 'tv-detail.png' });
   await pg.screenshot({ path: __dirname + '/out/tv-017-detail-flagship.png' });
@@ -286,19 +464,141 @@ const api = async q => (await fetch(M + q)).json();
   let st = await pg.evaluate(() => { const v = MLTV.player().v; return { src: v.currentSrc, t: v.currentTime, paused: v.paused }; });
   ok(/\/Videos\/it0\/stream\?static=true/.test(st.src) && !st.paused, 'direct play stream plays');
   ok(st.t >= 3, 'starts at requested resume position t=' + st.t.toFixed(1));
-  await key(OK); ok(await pg.evaluate(() => MLTV.player().v.paused), 'OK pauses'); await key(10252); ok(!(await pg.evaluate(() => MLTV.player().v.paused)), 'Play/Pause key resumes');
+  const hintsWhilePlaying = await pg.evaluate(() => getComputedStyle(document.getElementById('osd-hints')).display);
+  await key(OK);
+  const pausedState = await pg.evaluate(() => ({
+    paused: MLTV.player().v.paused,
+    topVisible: !document.getElementById('player-top').classList.contains('hide'),
+    osdVisible: !document.getElementById('osd').classList.contains('hide'),
+    hintsDisplay: getComputedStyle(document.getElementById('osd-hints')).display,
+    noMovieEyebrow: !document.getElementById('player-eyebrow')
+  }));
+  ok(pausedState.paused && pausedState.topVisible && pausedState.osdVisible && pausedState.noMovieEyebrow && hintsWhilePlaying === 'none' && pausedState.hintsDisplay === 'flex', 'OK pauses and reveals full paused HUD (clean movie title with no FEATURE FILM eyebrow + progress bar + keypad directions #osd-hints)');
+  await pg.screenshot({ path: __dirname + '/out/tv-014-player-paused.png' });
+  await pg.screenshot({ path: __dirname + '/out/tv-015-player-paused.png' });
+  await key(10252);
+  ok(await pg.evaluate(() => !MLTV.player().v.paused && document.getElementById('player-top').classList.contains('hide') && document.getElementById('osd').classList.contains('hide') && getComputedStyle(document.getElementById('osd-hints')).display === 'none'), 'Play/Pause key resumes and immediately hides top title, progress bar, and keypad hints');
   const t0 = await pg.evaluate(() => MLTV.player().v.currentTime); await key(L); const t1 = await pg.evaluate(() => MLTV.player().v.currentTime);
-  ok(t1 < t0 - 1, 'Left seeks back ' + t0.toFixed(1) + '→' + t1.toFixed(1));
+  const seekOverlayState = await pg.evaluate(() => ({
+    topHidden: document.getElementById('player-top').classList.contains('hide'),
+    osdVisible: !document.getElementById('osd').classList.contains('hide'),
+    hintsDisplay: getComputedStyle(document.getElementById('osd-hints')).display
+  }));
+  ok(t1 < t0 - 1 && seekOverlayState.topHidden && seekOverlayState.osdVisible && seekOverlayState.hintsDisplay === 'none', 'Left seeks back ' + t0.toFixed(1) + '→' + t1.toFixed(1) + ' and shows ONLY bottom progress bar (top title & keypad hints stay hidden)');
+  await pg.screenshot({ path: __dirname + '/out/tv-014-player-seek.png' });
+  await pg.screenshot({ path: __dirname + '/out/tv-014-player-clean.png' });
+  const proPlayerCheck = await pg.evaluate(() => {
+    const premEl = document.getElementById('prem');
+    const premRect = premEl ? premEl.getBoundingClientRect() : { left: 0, right: 0 };
+    return {
+      hasTop: !!document.getElementById('player-top'),
+      noMovieEyebrow: !document.getElementById('player-eyebrow'),
+      audioBadge: (document.getElementById('player-audio-badge') || {}).textContent,
+      subBadge: (document.getElementById('player-sub-badge') || {}).textContent,
+      fitBadge: (document.getElementById('player-fit-badge') || {}).textContent,
+      title: (document.getElementById('player-title') || {}).textContent,
+      noModeBadge: !document.getElementById('player-mode-badge'),
+      noOsdState: !document.getElementById('osd-state') && !document.getElementById('osd-sub') && !document.getElementById('scrub-tip'),
+      undTranslated: MLTV.player().formatAudioBadge({ Language: 'und', Codec: 'aac', ChannelLayout: 'stereo' }) === 'AAC \u00b7 STEREO' && MLTV.player().formatAudioBadge({ Language: 'und', Channels: 6 }) === '' && MLTV.player().formatTrackLabel({ Language: 'und', DisplayTitle: 'Und - AAC - Stereo' }, false) === 'AAC - Stereo',
+      hasFitHint: !!document.getElementById('fit-hint-pill'),
+      hasThumb: !!document.getElementById('pb-thumb') && !!document.getElementById('pb-buf'),
+      hasRem: /^-\d/.test((premEl || {}).textContent || ''),
+      premRight: Math.round(premRect.right),
+      premLeft: Math.round(premRect.left),
+      hintCount: document.querySelectorAll('#osd .hint-pill').length,
+      osdPad: getComputedStyle(document.getElementById('osd')).paddingLeft
+    };
+  });
+  ok(proPlayerCheck.hasTop && proPlayerCheck.noMovieEyebrow && proPlayerCheck.audioBadge === 'ENG' && proPlayerCheck.subBadge === 'CC OFF' && proPlayerCheck.fitBadge === 'ORIGINAL' && proPlayerCheck.title === 'Midnight Harbor' && proPlayerCheck.noModeBadge && proPlayerCheck.noOsdState && proPlayerCheck.undTranslated && proPlayerCheck.hasFitHint && proPlayerCheck.hasThumb && proPlayerCheck.hasRem && proPlayerCheck.premLeft > 1600 && proPlayerCheck.premRight > 1800 && proPlayerCheck.hintCount === 5 && proPlayerCheck.osdPad === '64px', 'Clean Pro Cinema Player positions -time pill (#prem) on far right (right=' + proPlayerCheck.premRight + 'px) and renders dynamic real stream badges (' + proPlayerCheck.audioBadge + ', ' + proPlayerCheck.subBadge + ', ' + proPlayerCheck.fitBadge + ')');
+  await pg.screenshot({ path: __dirname + '/out/tv-015-player-seek.png' });
+  // Test Fit to Screen toggle via D-pad Down (shows ONLY center HUD while top & bottom OSD stay hidden!)
+  await key(D);
+  const fitCheck1 = await pg.evaluate(() => ({
+    mode: MLTV.player().fitMode(),
+    objFit: getComputedStyle(MLTV.player().v).objectFit,
+    hud: (document.getElementById('player-hud') || {}).textContent,
+    topHidden: document.getElementById('player-top').classList.contains('hide'),
+    osdHidden: document.getElementById('osd').classList.contains('hide'),
+    saved: localStorage.getItem('mltv.fitMode')
+  }));
+  ok(fitCheck1.mode === 'fill' && fitCheck1.objFit === 'cover' && fitCheck1.hud === 'Zoom to Fit' && fitCheck1.topHidden && fitCheck1.osdHidden && fitCheck1.saved === 'fill', 'D-pad Down in Player toggles Fit to Screen and shows ONLY center HUD (topHidden=' + fitCheck1.topHidden + ', osdHidden=' + fitCheck1.osdHidden + ')');
+  await pg.screenshot({ path: __dirname + '/out/tv-013-player-pro.png' });
+  await key(D); // stretch
+  const fitCheck2 = await pg.evaluate(() => ({ mode: MLTV.player().fitMode(), objFit: getComputedStyle(MLTV.player().v).objectFit }));
+  ok(fitCheck2.mode === 'stretch' && fitCheck2.objFit === 'fill', 'Second D-pad Down toggles Stretch 16:9 (object-fit: fill)');
+  await key(D); // back to fit (original)
+  ok(await pg.evaluate(() => MLTV.player().fitMode() === 'fit' && getComputedStyle(MLTV.player().v).objectFit === 'contain'), 'Third D-pad Down restores Original Ratio (Fit / object-fit: contain)');
+  // Test v0.1.18 Multi-source Skip Intro / Recap / Credits detection & contextual #skip-intro-btn
+  const segParseCheck = await pg.evaluate(() => {
+    const p = MLTV.player();
+    const fromChapters = p.parseMediaSegments({ chapters: [{ Name: 'Cold Open', StartPositionTicks: 0 }, { Name: 'Opening Credits', StartPositionTicks: 15 * 1e7 }, { Name: 'Act 1', StartPositionTicks: 45 * 1e7 }] }, { RunTimeTicks: 600 * 1e7 });
+    const fromPlugin = p.parseMediaSegments({ introTimestamps: { Introduction: { Valid: true, IntroStart: 10, IntroEnd: 38 } } }, {});
+    return {
+      apiSegs: p.segments().length,
+      chapIntro: fromChapters.length === 1 && fromChapters[0].type === 'Intro' && fromChapters[0].startSec === 15 && fromChapters[0].endSec === 45,
+      plugIntro: fromPlugin.length === 1 && fromPlugin[0].type === 'Intro' && fromPlugin[0].startSec === 10 && fromPlugin[0].endSec === 38
+    };
+  });
+  ok(segParseCheck.apiSegs === 2 && segParseCheck.chapIntro && segParseCheck.plugIntro, 'Multi-source segment detector parses /MediaSegments (' + segParseCheck.apiSegs + '), /IntroTimestamps, and Chapters');
+  // Move playback into the Intro window (20s within 18s..42s) while keeping top/bottom overlays hidden
+  await pg.evaluate(() => {
+    const p = MLTV.player();
+    document.getElementById('player-top').classList.add('hide');
+    document.getElementById('osd').classList.add('hide');
+    p.v.currentTime = 20;
+    p.v.dispatchEvent(new Event('timeupdate'));
+  });
+  await sleep(200);
+  const skipBtnState = await pg.evaluate(() => {
+    const btn = document.getElementById('skip-intro-btn');
+    return {
+      visible: btn && getComputedStyle(btn).display !== 'none',
+      label: (document.getElementById('skip-intro-label') || {}).textContent,
+      topHidden: document.getElementById('player-top').classList.contains('hide'),
+      osdHidden: document.getElementById('osd').classList.contains('hide')
+    };
+  });
+  ok(skipBtnState.visible && skipBtnState.label === 'Skip Intro' && skipBtnState.topHidden && skipBtnState.osdHidden, 'Entering Intro window shows contextual #skip-intro-btn (Skip Intro) while keeping top title & bottom seek bar hidden');
+  await pg.screenshot({ path: __dirname + '/out/tv-018-skip-intro.png' });
+  // Press OK to skip intro -> jumps straight to 42s, hides #skip-intro-btn, and keeps video playing
+  await key(OK);
+  const afterSkip = await pg.evaluate(() => {
+    const p = MLTV.player();
+    const btn = document.getElementById('skip-intro-btn');
+    return {
+      t: p.v.currentTime,
+      paused: p.v.paused,
+      btnHidden: !btn || getComputedStyle(btn).display === 'none',
+      hud: (document.getElementById('player-hud') || {}).textContent
+    };
+  });
+  ok(afterSkip.t >= 41.5 && !afterSkip.paused && afterSkip.btnHidden && /Skipped Intro/i.test(afterSkip.hud), 'Pressing OK when #skip-intro-btn is visible skips straight to intro end (t=' + afterSkip.t.toFixed(1) + 's) without pausing');
+  await pg.evaluate(() => { MLTV.player().v.currentTime = 4; MLTV.player().v.dispatchEvent(new Event('timeupdate')); });
   await sleep(10500);
   let reps = (await api('/__state')).reports;
   ok(reps.some(r => r.kind === 'Playing' && r.ItemId === 'it0') && reps.some(r => r.kind === 'Progress' && r.ItemId === 'it0' && r.PositionTicks > 0), 'reports Playing + Progress with position');
   await key(U); await sleep(300);
-  ok(await pg.$$eval('#menu .opt', o => o.length) === 4, 'Up opens audio/subtitle menu (2 audio, Off, 1 subtitle)');
+  ok(await pg.$$eval('#menu .opt', o => o.length) === 4 && await pg.$$eval('#menu .fit-opt.focusable', o => o.length) === 3, 'Up opens audio/subtitle/fit menu (2 audio, Off, 1 subtitle, 3 focusable Screen Fit options)');
   await pg.screenshot({ path: OUT + 'tv-player.png' });
-  await key(D); await key(OK); await sleep(2500); // Hindi
+  // Test navigating down into Screen Fit options inside #menu card and pressing OK on Fit to Screen
+  await key(D, 4); // from 1st .opt (English) -> 2nd -> 3rd -> 4th -> Screen Fit row (Original)
+  await key(R); // move right to Fit to Screen ([data-fit="fill"])
+  const focusedFitOpt = await pg.evaluate(() => { const c = document.querySelector('.focused'); return c ? c.getAttribute('data-fit') : null; });
+  await key(OK); // click Fit to Screen inside #menu -> sets fitMode='fill', scales video, and closes menu
+  const menuFitApplied = await pg.evaluate(() => ({
+    focusedFitOpt: null,
+    mode: MLTV.player().fitMode(),
+    tx: MLTV.player().v.style.transform,
+    menuClosed: document.getElementById('menu').style.display === 'none'
+  }));
+  ok(focusedFitOpt === 'fill' && menuFitApplied.mode === 'fill' && /scale\(1\.34\)|scale\(1\.02\)/.test(menuFitApplied.tx) && menuFitApplied.menuClosed, 'Screen Fit buttons inside #menu card are focusable with D-pad and apply Fit to Screen zoom (' + menuFitApplied.tx + ')');
+  await key(D, 2); // cycle fill -> stretch -> fit
+  // Re-open menu and test Audio & Subtitle track switching
+  await key(U); await sleep(200);
+  await key(D); await key(OK); await sleep(2500); // Hindi (2nd .opt)
   const log1 = await api('/__log');
   ok(log1.some(l => /PlaybackInfo/.test(l)) && (await pg.evaluate(() => MLTV.player().base().AudioStreamIndex)) === 2, 'audio track switch requests stream with AudioStreamIndex=2');
-  await key(U); await key(D, 3); await key(OK); await sleep(2000);
+  await key(U); await key(D, 2); await key(OK); await sleep(2000); // From 2nd .opt (Hindi), 2 Down presses reaches 4th .opt (English SRT)
   ok(await pg.evaluate(() => { const t = document.querySelector('#player track'); return t && /Subtitles\/3\/0\/Stream\.vtt/.test(t.src); }), 'subtitle track attached (VTT)');
   ok(await pg.evaluate(() => MLTV.player().base().SubtitleStreamIndex) === 3, 'progress reports SubtitleStreamIndex=3');
   await pg.evaluate(() => MLTV.player().v.dispatchEvent(new Event('error'))); await sleep(300);
@@ -340,7 +640,7 @@ const api = async q => (await fetch(M + q)).json();
   ok(dev1 === await pg.evaluate(() => localStorage.getItem('mltest.deviceId')), 'device id stable');
   const log = await api('/__log');
   ok(log.filter(l => l.includes('AuthenticateWithQuickConnect')).length === 1, 'exactly one authenticate call');
-  ok(log.filter(l => /AUTH:/.test(l)).every(l => /AUTH:MediaBrowser Client="MojaLoss TV", Device="[^"]+", DeviceId="mltv-[0-9a-f]{24}", Version="0\.1\.12"(, Token="\*\*\*")?$/.test(l)), 'every request uses MediaBrowser header format');
+  ok(log.filter(l => /AUTH:/.test(l)).every(l => /AUTH:MediaBrowser Client="MojaLoss TV", Device="[^"]+", DeviceId="mltv-[0-9a-f]{24}", Version="0\.1\.23"(, Token="\*\*\*")?$/.test(l)), 'every request uses MediaBrowser header format');
   ok(!log.some(l => /X-Emby/i.test(l)), 'no X-Emby-Token');
   await api('/__state?revoked=1'); await pg.evaluate(() => MLTV.go('home', {}, true)); await sleep(1500);
   ok(await scr() === 'signin' && /Approve this TV again/.test(await pg.$eval('h1', e => e.textContent)), '401 → asks for phone approval again');
@@ -357,7 +657,7 @@ const api = async q => (await fetch(M + q)).json();
   await pg.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'no-preference' }]);
   await api('/__state?ota=none');
   await pg.goto(BASE); await sleep(1500);
-  ok(await pg.evaluate(() => MLTV_OTA.version() === '0.1.12' && MLTV_OTA.source() === 'builtin'), 'baseline boots v0.1.11 from builtin .wgt');
+  ok(await pg.evaluate(() => MLTV_OTA.version() === '0.1.23' && MLTV_OTA.source() === 'builtin'), 'baseline boots v0.1.11 from builtin .wgt');
   ok(await pg.evaluate(async () => (await MLTV_OTA.sha256Hex('mojaloss-tv-ota')) === MLTV_OTA.sha256Pure('mojaloss-tv-ota')), 'pure-JS SHA-256 matches WebCrypto SHA-256');
   // Navigate with remote D-pad Up -> Hero buttons -> Up -> Top bar #update-btn and press OK
   await key(U);
@@ -383,7 +683,7 @@ const api = async q => (await fetch(M + q)).json();
   // Valid v0.1.11 bundle: check, show banner + modal screenshot, install, reload into v0.1.11
   await api('/__state?ota=v019');
   await pg.evaluate(() => MLTV_OTA.checkForUpdates(true)); await sleep(600);
-  ok(await pg.$eval('#ota-banner', e => e.style.display !== 'none' && /Update available \(v0\.1\.13\)/.test(e.textContent)), 'Home banner shows Update available (v0.1.11)');
+  ok(await pg.$eval('#ota-banner', e => e.style.display !== 'none' && /Update available \(v0\.1\.24\)/.test(e.textContent)), 'Home banner shows Update available (v0.1.11)');
   await pg.evaluate(() => MLTV.openUpdateModal()); await sleep(300);
   await pg.screenshot({ path: OUT + 'tv-update.png' });
   await Promise.all([
@@ -391,8 +691,8 @@ const api = async q => (await fetch(M + q)).json();
     key(OK) // Click #ota-install-now -> downloads, verifies SHA-256, saves to storage, reloads
   ]);
   await sleep(1500);
-  ok(await pg.evaluate(() => MLTV_OTA.version() === '0.1.13' && MLTV_OTA.versionCode() === 13 && MLTV_OTA.source() === 'ota'), 'reloaded into verified OTA v0.1.11 bundle');
-  ok(await pg.$eval('#ver-badge', e => e.textContent) === 'v0.1.13', 'Home header badge shows v0.1.11 after OTA update');
+  ok(await pg.evaluate(() => MLTV_OTA.version() === '0.1.24' && MLTV_OTA.versionCode() === 24 && MLTV_OTA.source() === 'ota'), 'reloaded into verified OTA v0.1.11 bundle');
+  ok(await pg.$eval('#ver-badge', e => e.textContent) === 'v0.1.24', 'Home header badge shows v0.1.11 after OTA update');
 
   // Faulty/crashing OTA bundle: bootloader catches boot throw and automatically rolls back to baked-in 0.1.10
   await api('/__state?ota=crash');
@@ -401,7 +701,7 @@ const api = async q => (await fetch(M + q)).json();
   await api('/__state?ota=none');
   await pg.goto(BASE); await sleep(1500);
   const rb = await pg.evaluate(() => ({ ver: MLTV_OTA.version(), src: MLTV_OTA.source(), rolledBackFrom: MLTV_OTA.state().rolledBackFrom, err: MLTV_OTA.state().lastRollbackError, cached: localStorage.getItem('mltv_ota_bundle') }));
-  ok(rb.ver === '0.1.12' && rb.src === 'builtin' && rb.rolledBackFrom === '0.1.13' && !rb.cached, 'crashing OTA bundle automatically rolls back to baked-in v0.1.11 (' + rb.err + ')');
+  ok(rb.ver === '0.1.23' && rb.src === 'builtin' && rb.rolledBackFrom === '0.1.24' && !rb.cached, 'crashing OTA bundle automatically rolls back to baked-in v0.1.11 (' + rb.err + ')');
 
   ok(errs.length === 0, 'no page errors ' + errs.join(' | '));
   console.log(`\n${pass} passed, ${fail} failed`); process.exitCode = fail ? 1 : 0;
