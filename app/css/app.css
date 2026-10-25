@@ -337,6 +337,7 @@ video::cue{background:rgba(10,18,14,.84);color:#F4F1EA;font-size:38px;font-weigh
 .ver-meta span{font-size:16px;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ver-row.is-selected .ver-meta span{color:var(--forest)}
 #update-modal .ver-row.focused{transform:none;background:var(--sage);border-color:var(--forest)!important;box-shadow:0 0 0 3px var(--forest)}
-.ver-tag{flex:0 0 auto;font-size:14px;font-weight:800;letter-spacing:.4px;color:var(--forest)}
+.ver-list:not(.is-open) .ver-row:not(.is-selected){display:none}
+.ver-chev{flex:0 0 auto;font-size:16px;font-weight:800;color:var(--forest)}
 .update-actions{display:flex;gap:12px;margin-top:22px}
 .update-actions .btn{height:50px;padding:0 22px;font-size:18px}

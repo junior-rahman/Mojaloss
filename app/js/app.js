@@ -695,7 +695,7 @@
       }
     };
   }
-  function curVer() { return (window.MLTV_OTA && MLTV_OTA.version()) || '0.1.35'; }
+  function curVer() { return (window.MLTV_OTA && MLTV_OTA.version()) || '0.1.36'; }
   function topbar(extra) { return '<div class="top"><div class="brand"><i></i>MojaLoss <span class="ver-badge" id="ver-badge">v' + h(curVer()) + '</span></div><div class="actions">' + (extra || '') + '</div></div>'; }
 
   /* In-app OTA Update modal, quota-safe storage & automatic OTA updates */
@@ -778,7 +778,7 @@
       m.className = "modal-backdrop";
       (document.getElementById("root") || document.body).appendChild(m);
     }
-    var st = window.MLTV_OTA ? MLTV_OTA.state() : { activeVersion: "0.1.35", activeSource: "builtin", builtinVersion: "0.1.35", pin: null };
+    var st = window.MLTV_OTA ? MLTV_OTA.state() : { activeVersion: "0.1.36", activeSource: "builtin", builtinVersion: "0.1.36", pin: null };
     var avail = st.availableUpdate;
     var autoOn = isAutoUpdateOn();
     var pin = st.pin;
@@ -786,12 +786,12 @@
       st.checking ? "Checking for a newer version…" :
       st.lastCheckError ? ("Couldn't check. " + h(st.lastCheckError)) :
       pin ? ("Staying on v" + h(pin.version) + ". The last version is selected.") :
-      "The last version is selected. Click it, or choose another.";
+      "The last version is selected.";
     m.innerHTML = "<div class=\"modal-card update-card glass\">" +
       "<div class=\"update-kicker\">Update</div>" +
       "<h1 class=\"update-ver\">v" + h(st.activeVersion) + "</h1>" +
       "<p class=\"update-lead\" id=\"ota-modal-status\">" + statusHtml + "</p>" +
-      "<div class=\"ver-head\">Version<span>Last version selected</span></div>" +
+      "<div class=\"ver-head\">Version<span id=\"ota-ver-hint\">Click to see other versions</span></div>" +
       "<div class=\"ver-list\" id=\"ota-version-list\"><p class=\"update-lead\">Loading versions…</p></div>" +
       "<div class=\"update-actions\">" +
       "<div class=\"btn focusable\" id=\"ota-check-now\">Check</div>" +
@@ -826,11 +826,10 @@
         var html = "";
         for (var i = 0; i < list.length; i++) {
           var v = list[i];
-          var sub = v.blocked ? "Too old for this TV" : (v.latest ? (v.current ? "Last version · In use" : "Last version") : (v.current ? "In use" : "Earlier version"));
-          var tag = v.latest ? "Selected" : "";
+          var sub = v.blocked ? "Too old for this TV" : (v.latest ? "Last version" : (v.current ? "In use" : "Earlier version"));
           html += "<div class=\"ver-row" + (v.blocked ? "" : " focusable") + (v.latest ? " is-selected" : "") + "\" data-code=\"" + v.versionCode + "\">" +
             "<span class=\"ver-radio\"></span><div class=\"ver-meta\"><b>v" + h(v.version) + "</b><span>" + h(sub) + "</span></div>" +
-            (tag ? "<div class=\"ver-tag\">" + tag + "</div>" : "") + "</div>";
+            (v.latest ? "<div class=\"ver-chev\">Show</div>" : "") + "</div>";
         }
         box.innerHTML = html;
         var rows = box.querySelectorAll(".ver-row.focusable");
@@ -841,12 +840,22 @@
             for (var k = 0; k < list.length; k++) if (list[k].versionCode === code) entry = list[k];
             if (!entry || entry.blocked) return;
             var sEl = document.getElementById("ota-modal-status");
+            var hint = document.getElementById("ota-ver-hint");
             if (entry.latest) {
+              if (!box.classList.contains("is-open")) {
+                box.classList.add("is-open");
+                if (hint) hint.textContent = "Choose a version";
+                var chev = this.querySelector(".ver-chev");
+                if (chev) chev.textContent = "Use";
+                return;
+              }
+              box.classList.remove("is-open");
+              if (hint) hint.textContent = "Click to see other versions";
+              var chev2 = this.querySelector(".ver-chev");
+              if (chev2) chev2.textContent = "Show";
               if (sEl) sEl.textContent = "Using the last version…";
               MLTV_OTA.useLatest().then(function (res) {
-                if (res && res.already) {
-                  if (sEl) sEl.textContent = "Already on the last version.";
-                }
+                if (res && res.already && sEl) sEl.textContent = "Already on the last version.";
               }, function (err) {
                 if (sEl) sEl.textContent = (err && err.message) ? err.message : "Could not switch versions";
               });
