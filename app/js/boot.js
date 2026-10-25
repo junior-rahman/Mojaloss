@@ -4,8 +4,8 @@
       rolls back automatically to the baked-in .wgt files so a bad update can never brick the TV.
    3. Provides window.MLTV_OTA for checking, downloading, SHA-256 verifying, and applying updates. */
 (function () {
-  var BUILTIN_VERSION = '0.1.24';
-  var BUILTIN_VERSION_CODE = 24;
+  var BUILTIN_VERSION = '0.1.25';
+  var BUILTIN_VERSION_CODE = 25;
   var STORAGE_KEY = 'mltv_ota_bundle';
   var DB_NAME = 'mltv_ota_db';
   var STORE_NAME = 'bundles';
@@ -122,8 +122,36 @@
     } catch (e) { return null; }
   }
 
+  function evictCachesForOta() {
+    try {
+      var keep = { "mltv_ota_bundle": 1, "mltv_auto_update": 1, "mltv.platOrder": 1, "mltv.requests.v1": 1, "mltv.fitMode": 1, "mltv.maxBitrate": 1 };
+      var toRemove = [];
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (k && !keep[k] && k.indexOf("mltv.token") < 0 && k.indexOf("mltv.userId") < 0 && k.indexOf("mltv.deviceId") < 0 && k.indexOf("mltest.") !== 0 && k.indexOf("ml.") !== 0) {
+          if (k.indexOf("platHubCache") >= 0 || k.indexOf("disc") >= 0 || k.indexOf("posterMap") >= 0 || k.indexOf("rollback") >= 0) {
+            toRemove.push(k);
+          }
+        }
+      }
+      for (var j = 0; j < toRemove.length; j++) localStorage.removeItem(toRemove[j]);
+    } catch (e) {}
+  }
+
   function writeBundleStorage(b) {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(b)); } catch (e) {}
+    var rawJson = JSON.stringify(b);
+    try {
+      evictCachesForOta();
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.setItem(STORAGE_KEY, rawJson);
+    } catch (e) {
+      try {
+        evictCachesForOta();
+        localStorage.removeItem("mltv.platHubCache.v4");
+        localStorage.removeItem(STORAGE_KEY);
+        localStorage.setItem(STORAGE_KEY, rawJson);
+      } catch (e2) {}
+    }
     return new Promise(function (resolve) {
       try {
         if (!window.indexedDB) return resolve(b);

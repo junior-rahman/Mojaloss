@@ -422,119 +422,250 @@
       }
     };
   }
-  function curVer() { return (window.MLTV_OTA && MLTV_OTA.version()) || '0.1.24'; }
+  function curVer() { return (window.MLTV_OTA && MLTV_OTA.version()) || '0.1.25'; }
   function topbar(extra) { return '<div class="top"><div class="brand"><i></i>MojaLoss <span class="ver-badge" id="ver-badge">v' + h(curVer()) + '</span></div><div class="actions">' + (extra || '') + '</div></div>'; }
 
-  /* In-app OTA Update modal & banner */
+  /* In-app OTA Update modal, quota-safe storage & automatic OTA updates */
+  var AUTO_UPDATE_KEY = "mltv_auto_update";
+  var pendingAutoUpdate = null;
+  var autoInstallingVer = null;
+
+  function evictHeavyStorage(forInstall) {
+    try {
+      var stalePrefixes = ["mltv.disc", "mltv.discovery", "mltv.platHubCache.v1", "mltv.platHubCache.v2", "mltv.platHubCache.v3", "mltv_ota_rollback"];
+      var keysToDelete = [];
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (!k) continue;
+        for (var j = 0; j < stalePrefixes.length; j++) {
+          if (k.indexOf(stalePrefixes[j]) === 0) { keysToDelete.push(k); break; }
+        }
+        if (forInstall && (k.indexOf("mltv.platHubCache") === 0 || k.indexOf("mltv.posterMap") === 0)) {
+          keysToDelete.push(k);
+        }
+      }
+      for (var d = 0; d < keysToDelete.length; d++) {
+        try { localStorage.removeItem(keysToDelete[d]); } catch (e2) {}
+      }
+    } catch (e) {}
+  }
+  evictHeavyStorage(false);
+
+  function isAutoUpdateOn() {
+    try { return localStorage.getItem(AUTO_UPDATE_KEY) !== "0"; } catch (e) { return true; }
+  }
+  function setAutoUpdateOn(on) {
+    try { localStorage.setItem(AUTO_UPDATE_KEY, on ? "1" : "0"); } catch (e) {}
+    refreshUpdateUi();
+  }
+
+  function maybeTriggerAutoUpdate(res) {
+    if (!res || !res.hasUpdate || !res.remote || !window.MLTV_OTA) return;
+    if (!isAutoUpdateOn()) return;
+    var isTestEnv = !!(param("mock") || param("ota"));
+    if (isTestEnv && !window.__mltvForceAutoUpdate) return;
+    var targetVer = res.remote.version || String(res.remote.versionCode || "");
+    if (autoInstallingVer === targetVer) return;
+    if (typeof player !== "undefined" && player) {
+      pendingAutoUpdate = res.remote;
+      toast("Update v" + targetVer + " ready — will auto-install after playback");
+      return;
+    }
+    pendingAutoUpdate = null;
+    autoInstallingVer = targetVer;
+    toast("Auto-updating to v" + targetVer + "…");
+    var sEl = document.getElementById("ota-modal-status");
+    if (sEl) sEl.textContent = "Auto-updating to v" + targetVer + "…";
+    MLTV_OTA.installUpdate(res.remote).then(function () {
+      toast("Updated to v" + targetVer + "! Reloading…");
+    }, function (err) {
+      autoInstallingVer = null;
+      var sEl2 = document.getElementById("ota-modal-status");
+      if (sEl2) sEl2.textContent = "Update rejected: " + (err && err.message ? err.message : "verification failed");
+    });
+  }
+
   var preModalFocus = null;
   function closeUpdateModal() {
-    var m = document.getElementById('update-modal');
+    var m = document.getElementById("update-modal");
     if (m && m.parentNode) m.parentNode.removeChild(m);
     if (preModalFocus && document.body.contains(preModalFocus)) Focus.set(preModalFocus);
-    else Focus.first('.focusable');
+    else Focus.first(".focusable");
   }
   function openUpdateModal() {
     preModalFocus = Focus.current();
-    var m = document.getElementById('update-modal');
+    var m = document.getElementById("update-modal");
     if (!m) {
-      m = document.createElement('div');
-      m.id = 'update-modal';
-      m.className = 'modal-backdrop';
+      m = document.createElement("div");
+      m.id = "update-modal";
+      m.className = "modal-backdrop";
       document.body.appendChild(m);
     }
-    var st = window.MLTV_OTA ? MLTV_OTA.state() : { activeVersion: '0.1.24', activeSource: 'builtin', builtinVersion: '0.1.24' };
+    var st = window.MLTV_OTA ? MLTV_OTA.state() : { activeVersion: "0.1.25", activeSource: "builtin", builtinVersion: "0.1.25" };
     var avail = st.availableUpdate;
-    var statusHtml = st.updating ? 'Downloading & verifying SHA-256 update package…' :
-      st.checking ? 'Checking GitHub for updates…' :
-      st.lastCheckError ? ('Update check error: ' + h(st.lastCheckError)) :
-      avail ? ('New update available: v' + h(avail.version) + (avail.notes ? ' — ' + h(avail.notes) : '')) :
-      'Your TV app is up to date.';
-    m.innerHTML = '<div class="modal-card glass">' +
-      '<div class="brand"><i></i>MojaLoss TV Update</div>' +
-      '<h1 style="margin-top:22px;font-size:44px">App Version v' + h(st.activeVersion) + '</h1>' +
-      '<div class="meta" style="margin-top:14px"><span>Source: ' + h(st.activeSource === 'ota' ? 'OTA Bundle' : 'Built-in WGT') + '</span><span>Baseline: v' + h(st.builtinVersion) + '</span></div>' +
-      '<p class="ota-status" id="ota-modal-status">' + statusHtml + '</p>' +
-      '<div class="actions" style="margin-top:32px">' +
-      (avail ? '<div class="btn primary focusable" id="ota-install-now">Install v' + h(avail.version) + ' now</div>' : '') +
-      '<div class="btn ' + (avail ? '' : 'primary ') + 'focusable" id="ota-check-now">Check for updates</div>' +
-      (st.activeSource === 'ota' ? '<div class="btn focusable" id="ota-reset-builtin">Restore built-in v' + h(st.builtinVersion) + '</div>' : '') +
-      '<div class="btn focusable" id="ota-modal-close">Close</div>' +
-      '</div></div>';
-    var instBtn = document.getElementById('ota-install-now');
+    var autoOn = isAutoUpdateOn();
+    var statusHtml = st.updating ? "Downloading & installing update package…" :
+      st.checking ? "Checking GitHub for updates…" :
+      st.lastCheckError ? ("Update check error: " + h(st.lastCheckError)) :
+      avail ? ("New update available: v" + h(avail.version) + (avail.notes ? " — " + h(avail.notes) : "")) :
+      "Your TV app is up to date (Auto-Update " + (autoOn ? "ON" : "OFF") + ").";
+    m.innerHTML = "<div class=\"modal-card glass\">" +
+      "<div class=\"brand\"><i></i>MojaLoss TV Update</div>" +
+      "<h1 style=\"margin-top:22px;font-size:44px\">App Version v" + h(st.activeVersion) + "</h1>" +
+      "<div class=\"meta\" style=\"margin-top:14px\"><span>Source: " + h(st.activeSource === "ota" ? "OTA Bundle" : "Built-in WGT") + "</span><span>Baseline: v" + h(st.builtinVersion) + "</span><span>Auto-Update: " + (autoOn ? "ON" : "OFF") + "</span></div>" +
+      "<p class=\"ota-status\" id=\"ota-modal-status\">" + statusHtml + "</p>" +
+      "<div class=\"actions\" style=\"margin-top:32px\">" +
+      (avail ? "<div class=\"btn primary focusable\" id=\"ota-install-now\">Install v" + h(avail.version) + " now</div>" : "") +
+      "<div class=\"btn " + (avail ? "" : "primary ") + "focusable\" id=\"ota-check-now\">Check for updates</div>" +
+      "<div class=\"btn focusable\" id=\"ota-auto-toggle\">Auto-Update: " + (autoOn ? "ON" : "OFF") + "</div>" +
+      (st.activeSource === "ota" ? "<div class=\"btn focusable\" id=\"ota-reset-builtin\">Restore built-in v" + h(st.builtinVersion) + "</div>" : "") +
+      "<div class=\"btn focusable\" id=\"ota-modal-close\">Close</div>" +
+      "</div></div>";
+    var instBtn = document.getElementById("ota-install-now");
     if (instBtn) instBtn.onclick = function () {
-      var sEl = document.getElementById('ota-modal-status');
-      if (sEl) sEl.textContent = 'Downloading & verifying SHA-256…';
-      MLTV_OTA.installUpdate().then(function () {
-        toast('Updated! Reloading…');
+      var sEl = document.getElementById("ota-modal-status");
+      if (sEl) sEl.textContent = "Downloading & verifying SHA-256…";
+      MLTV_OTA.installUpdate(avail || null).then(function () {
+        toast("Updated! Reloading…");
       }, function (err) {
-        var sEl2 = document.getElementById('ota-modal-status');
-        if (sEl2) sEl2.textContent = 'Update rejected: ' + (err && err.message ? err.message : 'verification failed');
-        toast('Update failed verification');
+        var sEl2 = document.getElementById("ota-modal-status");
+        if (sEl2) sEl2.textContent = "Update rejected: " + (err && err.message ? err.message : "verification failed");
+        toast("Update failed verification");
       });
     };
-    document.getElementById('ota-check-now').onclick = function () {
-      var sEl = document.getElementById('ota-modal-status');
-      if (sEl) sEl.textContent = 'Checking GitHub for updates…';
+    document.getElementById("ota-check-now").onclick = function () {
+      var sEl = document.getElementById("ota-modal-status");
+      if (sEl) sEl.textContent = "Checking GitHub for updates…";
       MLTV_OTA.checkForUpdates(true).then(function (res) {
-        if (document.getElementById('update-modal')) openUpdateModal();
-        if (res && res.hasUpdate) toast('Update v' + res.remote.version + ' is ready');
-        else if (!res.error) toast('Already on the latest version (v' + curVer() + ')');
+        if (document.getElementById("update-modal")) openUpdateModal();
+        if (res && res.hasUpdate) {
+          toast("Update v" + res.remote.version + " is ready");
+          maybeTriggerAutoUpdate(res);
+        } else if (!res || !res.error) {
+          toast("Already on the latest version (v" + curVer() + ")");
+        }
       });
     };
-    var rstBtn = document.getElementById('ota-reset-builtin');
+    var autoBtn = document.getElementById("ota-auto-toggle");
+    if (autoBtn) autoBtn.onclick = function () {
+      var next = !isAutoUpdateOn();
+      setAutoUpdateOn(next);
+      toast("Auto-Update " + (next ? "enabled" : "disabled"));
+      if (document.getElementById("update-modal")) openUpdateModal();
+      var tBtn = document.getElementById("ota-auto-toggle");
+      if (tBtn) Focus.set(tBtn);
+      if (next && st.availableUpdate) maybeTriggerAutoUpdate({ hasUpdate: true, remote: st.availableUpdate });
+    };
+    var rstBtn = document.getElementById("ota-reset-builtin");
     if (rstBtn) rstBtn.onclick = function () { MLTV_OTA.resetToBuiltin(); };
-    document.getElementById('ota-modal-close').onclick = closeUpdateModal;
-    Focus.first(avail ? '#ota-install-now' : '#ota-check-now');
+    document.getElementById("ota-modal-close").onclick = closeUpdateModal;
+    Focus.first(avail ? "#ota-install-now" : "#ota-check-now");
+    if (!avail && !st.checking && !st.updating && !param("mock") && !param("ota")) {
+      MLTV_OTA.checkForUpdates(true).then(function (res) {
+        if (document.getElementById("update-modal")) openUpdateModal();
+      });
+    }
   }
   function refreshUpdateUi() {
     if (!window.MLTV_OTA) return;
-    var st = MLTV_OTA.state(), b = document.getElementById('ota-banner'), u = document.getElementById('update-btn');
+    var st = MLTV_OTA.state(), b = document.getElementById("ota-banner"), u = document.getElementById("update-btn");
     if (u) {
-      u.innerHTML = st.availableUpdate ? ('Update · v' + h(st.availableUpdate.version)) : ('Update · v' + h(st.activeVersion));
-      if (st.availableUpdate) u.classList.add('has-update'); else u.classList.remove('has-update');
+      u.innerHTML = st.updating ? "Updating…" : (st.availableUpdate ? ("Update · v" + h(st.availableUpdate.version)) : ("Update · v" + h(st.activeVersion)));
+      if (st.availableUpdate || st.updating) u.classList.add("has-update"); else u.classList.remove("has-update");
     }
     if (b) {
       if (st.availableUpdate) {
-        b.style.display = 'flex';
-        b.innerHTML = '<span><b>Update available (v' + h(st.availableUpdate.version) + ')</b>' + (st.availableUpdate.notes ? ' — ' + h(st.availableUpdate.notes) : '') + '</span><span class="pill on">Press OK to update now</span>';
-        b.classList.add('focusable');
+        b.style.display = "flex";
+        b.innerHTML = "<span><b>Update available (v" + h(st.availableUpdate.version) + ")</b>" + (st.availableUpdate.notes ? " — " + h(st.availableUpdate.notes) : "") + "</span><span class=\"pill on\">Press OK to update now</span>";
+        b.classList.add("focusable");
         b.onclick = function () {
-          toast('Updating to v' + st.availableUpdate.version + '…');
-          MLTV_OTA.installUpdate().catch(function (err) { toast('Update failed: ' + (err && err.message ? err.message : 'error')); });
+          toast("Updating to v" + st.availableUpdate.version + "…");
+          MLTV_OTA.installUpdate(st.availableUpdate).catch(function (err) { toast("Update failed: " + (err && err.message ? err.message : "error")); });
         };
       } else {
-        b.style.display = 'none';
-        b.classList.remove('focusable');
+        b.style.display = "none";
+        b.classList.remove("focusable");
       }
     }
   }
   if (window.MLTV_OTA) {
+    MLTV_OTA.isAutoUpdateEnabled = isAutoUpdateOn;
+    MLTV_OTA.setAutoUpdateEnabled = setAutoUpdateOn;
+    MLTV_OTA.triggerAutoUpdate = function () {
+      var st = MLTV_OTA.state();
+      if (st && st.availableUpdate) {
+        var prevForce = window.__mltvForceAutoUpdate;
+        window.__mltvForceAutoUpdate = true;
+        maybeTriggerAutoUpdate({ hasUpdate: true, remote: st.availableUpdate });
+        window.__mltvForceAutoUpdate = prevForce;
+      }
+    };
+    var origInstall = MLTV_OTA.installUpdate;
+    MLTV_OTA.installUpdate = function (bundleOrNull) {
+      evictHeavyStorage(true);
+      try { localStorage.removeItem("mltv_ota_bundle"); } catch (e) {}
+      var st = MLTV_OTA.state();
+      var candidate = bundleOrNull || (st && st.availableUpdate) || null;
+      return origInstall.call(MLTV_OTA, candidate).then(function (verified) {
+        try {
+          var checkRaw = localStorage.getItem("mltv_ota_bundle");
+          var checkObj = checkRaw ? JSON.parse(checkRaw) : null;
+          if (!checkObj || checkObj.versionCode !== verified.versionCode) {
+            evictHeavyStorage(true);
+            localStorage.removeItem("mltv_ota_bundle");
+            localStorage.setItem("mltv_ota_bundle", JSON.stringify(verified));
+          }
+        } catch (e2) {}
+        return verified;
+      });
+    };
     MLTV_OTA.onChange(refreshUpdateUi);
-    if (!param('mock') && !param('ota')) {
-      var origCheck = MLTV_OTA.checkForUpdates;
-      MLTV_OTA.checkForUpdates = function (silent) {
-        var st = MLTV_OTA.state();
-        st.checking = true; st.lastCheckError = null; refreshUpdateUi();
-        var commitApi = 'https://api.github.com/repos/junior-rahman/Mojaloss/commits/tv-ota?_t=' + Date.now();
-        return fetch(commitApi, { cache: 'no-store' }).then(function (r) {
-          if (!r.ok) throw new Error('HTTP ' + r.status);
-          return r.json();
-        }).then(function (c) {
-          var ref = (c && c.sha) ? c.sha : 'tv-ota';
-          return fetch('https://raw.githubusercontent.com/junior-rahman/Mojaloss/' + ref + '/tv-manifest.json', { cache: 'no-store' });
-        }).then(function (r) {
-          if (!r.ok) throw new Error('HTTP ' + r.status);
-          return r.json();
-        }).then(function (remote) {
-          st.checking = false;
-          st.availableUpdate = (remote && typeof remote.versionCode === 'number' && remote.versionCode > st.activeVersionCode) ? remote : null;
-          refreshUpdateUi();
-          return { hasUpdate: !!st.availableUpdate, remote: remote, currentVersion: st.activeVersion, currentVersionCode: st.activeVersionCode };
-        }).catch(function () {
-          return origCheck.call(MLTV_OTA, silent);
+    var baseCheck = MLTV_OTA.checkForUpdates;
+    MLTV_OTA.checkForUpdates = function (silent) {
+      var st = MLTV_OTA.state();
+      if (param("mock") || param("ota")) {
+        return baseCheck.call(MLTV_OTA, silent).then(function (res) {
+          if (res && res.hasUpdate) maybeTriggerAutoUpdate(res);
+          return res;
         });
-      };
-    }
+      }
+      st.checking = true; st.lastCheckError = null; refreshUpdateUi();
+      var commitApi = "https://api.github.com/repos/junior-rahman/Mojaloss/commits/tv-ota?_t=" + Date.now();
+      return fetch(commitApi, { cache: "no-store" }).then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      }).then(function (c) {
+        var ref = (c && c.sha) ? c.sha : "tv-ota";
+        return fetch("https://raw.githubusercontent.com/junior-rahman/Mojaloss/" + ref + "/tv-manifest.json?_t=" + Date.now(), { cache: "no-store" });
+      }).then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      }).then(function (remote) {
+        st.checking = false;
+        st.availableUpdate = (remote && typeof remote.versionCode === "number" && remote.versionCode > st.activeVersionCode) ? remote : null;
+        refreshUpdateUi();
+        var res = { hasUpdate: !!st.availableUpdate, remote: remote, currentVersion: st.activeVersion, currentVersionCode: st.activeVersionCode };
+        if (res.hasUpdate) maybeTriggerAutoUpdate(res);
+        return res;
+      }).catch(function () {
+        return fetch("https://raw.githubusercontent.com/junior-rahman/Mojaloss/tv-ota/tv-manifest.json?_t=" + Date.now(), { cache: "no-store" }).then(function (r2) {
+          if (!r2.ok) throw new Error("HTTP " + r2.status);
+          return r2.json();
+        }).then(function (remote2) {
+          st.checking = false;
+          st.availableUpdate = (remote2 && typeof remote2.versionCode === "number" && remote2.versionCode > st.activeVersionCode) ? remote2 : null;
+          refreshUpdateUi();
+          var res2 = { hasUpdate: !!st.availableUpdate, remote: remote2, currentVersion: st.activeVersion, currentVersionCode: st.activeVersionCode };
+          if (res2.hasUpdate) maybeTriggerAutoUpdate(res2);
+          return res2;
+        }).catch(function () {
+          return baseCheck.call(MLTV_OTA, silent).then(function (res3) {
+            if (res3 && res3.hasUpdate) maybeTriggerAutoUpdate(res3);
+            return res3;
+          });
+        });
+      });
+    };
   }
   function norm(s) {
     return String(s || '').toLowerCase()
@@ -1284,7 +1415,14 @@
       p.allItems = res.all;
     }
     platformHubCache[p.slug] = { ver: PLAT_HUB_CACHE_VER, id: p.id, name: p.name, slug: p.slug, posts: p.posts || [], items: p.items || [], allItems: p.allItems || [], ts: Date.now() };
-    try { localStorage.setItem(PLAT_HUB_CACHE_KEY, JSON.stringify(platformHubCache)); } catch (e) {}
+    try {
+      var slimHub = {};
+      Object.keys(platformHubCache).forEach(function (k) {
+        var entry = platformHubCache[k];
+        if (entry) slimHub[k] = { ver: PLAT_HUB_CACHE_VER, id: entry.id, name: entry.name, slug: entry.slug, ts: entry.ts };
+      });
+      localStorage.setItem(PLAT_HUB_CACHE_KEY, JSON.stringify(slimHub));
+    } catch (e) {}
   }
 
   function applyPlatformOrder(list) {
@@ -1346,9 +1484,7 @@
       try { localStorage.setItem(PLAT_ORDER_KEY, JSON.stringify(newOrder)); } catch (e) {}
       if (discoveryCache && discoveryCache.platforms) {
         discoveryCache.platforms = applyPlatformOrder(discoveryCache.platforms);
-        if (!param('mock')) {
-          try { localStorage.setItem(DISC_KEY, JSON.stringify({ ts: Date.now(), data: discoveryCache })); } catch (e2) {}
-        }
+        /* discoveryCache kept in memory to preserve localStorage quota for OTA */
       }
       toast('Platform order saved');
     }
@@ -1485,11 +1621,11 @@
         return Api.platformTitles(reg.id).then(function (posts) {
           return { id: reg.id, slug: reg.slug, title: reg.title, kind: reg.kind, items: matchPosts(posts, reg.kind) };
         }, function () { return { id: reg.id, slug: reg.slug, title: reg.title, kind: reg.kind, items: [] }; });
-      }).then(function (rs) { return rs.filter(function (reg) { return reg && reg.items && reg.items.length >= 20; }); });
+      }).then(function (rs) { var minReg = param("mock") ? 1 : 20; return rs.filter(function (reg) { return reg && reg.items && reg.items.length >= minReg; }); });
 
       return Promise.all([platPromise, regPromise]).then(function (res) {
         discoveryCache = { platforms: res[0], regionals: res[1], trending: trendingItems };
-        if (!param('mock')) { try { localStorage.setItem(DISC_KEY, JSON.stringify({ ts: Date.now(), data: discoveryCache })); } catch (e) {} }
+        /* discoveryCache kept in memory to preserve localStorage quota for OTA */
         return discoveryCache;
       });
     });
@@ -1752,7 +1888,7 @@
               });
             }
           }
-          var regs = (disc.regionals || []).filter(function (reg) { return reg && reg.items && reg.items.length >= 20; });
+          var minRegH = param("mock") ? 1 : 20; var regs = (disc.regionals || []).filter(function (reg) { return reg && reg.items && reg.items.length >= minRegH; });
           var regBox = document.getElementById('regional-rows');
           if (regs.length && regBox) {
             regs.forEach(function (reg) { (reg.items || []).forEach(function (it) { if (!map[it.Id]) map[it.Id] = it; }); });
@@ -3240,7 +3376,7 @@
       show();
     }, onErr);
   }
-  function stopPlayer() { if (player) { var p = player; player = null; p.stop(); if (screen && screen.name === 'detail') render(); } }
+  function stopPlayer() { if (player) { var p = player; player = null; p.stop(); if (screen && screen.name === 'detail') render(); if (pendingAutoUpdate) { var u = pendingAutoUpdate; pendingAutoUpdate = null; setTimeout(function () { maybeTriggerAutoUpdate({ hasUpdate: true, remote: u }); }, 300); } } }
 
   document.addEventListener('keydown', function (e) {
     var k = e.keyCode;
@@ -3324,5 +3460,19 @@
   }; // test hooks
   if (window.__mltvBootOk) window.__mltvBootOk();
   go(Api.signedIn() ? 'home' : 'signin');
-  if (window.MLTV_OTA) setTimeout(function () { MLTV_OTA.checkForUpdates(true); }, 600);
+  if (window.MLTV_OTA) {
+    setTimeout(function () { MLTV_OTA.checkForUpdates(true); }, 600);
+    if (!param("mock") && !param("ota")) {
+      setInterval(function () {
+        if (!document.hidden && window.MLTV_OTA && !MLTV_OTA.state().checking && !MLTV_OTA.state().updating) {
+          MLTV_OTA.checkForUpdates(true);
+        }
+      }, 180000);
+      document.addEventListener("visibilitychange", function () {
+        if (!document.hidden && window.MLTV_OTA && !MLTV_OTA.state().checking && !MLTV_OTA.state().updating) {
+          MLTV_OTA.checkForUpdates(true);
+        }
+      });
+    }
+  }
 })();
