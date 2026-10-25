@@ -320,26 +320,32 @@ video::cue{background:rgba(10,18,14,.84);color:#F4F1EA;font-size:38px;font-weigh
 
 .modal-card{max-height:900px;overflow:auto}
 #root > .modal-backdrop{position:absolute;top:0;left:0;width:1920px;height:1080px}
-.update-card{width:820px;padding:40px 44px 32px;border-radius:28px;background:rgba(15,26,21,.97);border:1.5px solid rgba(180,210,189,.24)}
-.update-kicker{font-size:15px;font-weight:800;letter-spacing:2.4px;text-transform:uppercase;color:var(--forest)}
-.update-ver{margin-top:6px;font-size:64px;font-weight:800;letter-spacing:-1.6px;line-height:1}
-.update-lead{margin-top:12px;font-size:20px;line-height:1.4;color:var(--ink2)}
-.ver-head{display:flex;align-items:baseline;justify-content:space-between;margin-top:28px;font-size:15px;font-weight:800;letter-spacing:1.6px;text-transform:uppercase;color:var(--ink2)}
+.update-card{width:860px;padding:46px 52px 36px;border-radius:32px;background:rgba(13,22,18,.97);border:1.5px solid rgba(180,210,189,.22);box-shadow:0 32px 80px rgba(0,0,0,.62)}
+.update-top{display:flex;align-items:center;justify-content:space-between}
+.update-top .brand{font-size:22px}
+.update-kicker{font-size:14px;font-weight:800;letter-spacing:2.2px;text-transform:uppercase;color:var(--forest)}
+.update-ver{margin-top:22px;font-size:84px;font-weight:800;letter-spacing:-2.4px;line-height:.92}
+.update-lead{display:inline-flex;align-items:center;margin-top:16px;padding:8px 16px;border-radius:999px;background:rgba(31,66,51,.92);border:1px solid rgba(180,210,189,.28);color:var(--forest);font-size:18px;font-weight:700;line-height:1.2}
+.update-rule{height:1px;margin:28px 0 6px;background:rgba(180,210,189,.16)}
+.ver-head{display:flex;align-items:baseline;justify-content:space-between;margin-top:18px;font-size:14px;font-weight:800;letter-spacing:1.8px;text-transform:uppercase;color:var(--ink2)}
 .ver-head span{font-size:15px;font-weight:700;letter-spacing:0;text-transform:none;color:var(--forest)}
 .ver-list{margin-top:12px;max-height:360px;overflow:auto;display:flex;flex-direction:column;gap:8px}
-.ver-row{display:flex;align-items:center;gap:16px;min-height:74px;padding:0 18px;border-radius:16px;background:rgba(24,40,32,.55);border:1.5px solid transparent}
-.ver-row.is-selected{background:var(--sage);border-color:rgba(180,210,189,.28)}
+.ver-row{display:flex;align-items:center;gap:16px;min-height:82px;padding:0 22px;border-radius:18px;background:rgba(24,40,32,.72);border:1.5px solid rgba(180,210,189,.12)}
+.ver-row.is-selected{background:rgba(31,66,51,.96);border-color:rgba(180,210,189,.32)}
 .ver-radio{width:22px;height:22px;border-radius:50%;border:2px solid var(--outline);flex:0 0 22px;position:relative}
 .ver-row.is-selected .ver-radio{border-color:var(--forest);background:var(--forest)}
 .ver-row.is-selected .ver-radio:after{content:"";position:absolute;left:5px;top:5px;width:8px;height:8px;border-radius:50%;background:var(--on-forest)}
-.ver-meta{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
-.ver-meta b{font-size:24px;font-weight:800;white-space:nowrap;letter-spacing:-.3px}
-.ver-meta span{font-size:16px;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ver-meta{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}
+.ver-meta b{font-size:28px;font-weight:800;white-space:nowrap;letter-spacing:-.4px}
+.ver-meta span{font-size:16px;font-weight:600;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ver-row.is-selected .ver-meta span{color:var(--forest)}
+#update-modal .focusable.focused{transform:none}
 #update-modal .ver-row.focused{transform:none;background:var(--sage);border-color:var(--forest)!important;box-shadow:0 0 0 3px var(--forest)}
-#ota-older{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+#ota-older{display:flex;flex-direction:column;gap:8px;margin-top:10px;max-height:240px;overflow:auto}
 #ota-older[hidden]{display:none}
-#ota-last .btn,#ota-latest-action .btn{width:100%;height:56px;margin-top:12px;justify-content:center;font-size:20px}
+#ota-last{margin-top:12px}
+#ota-last .btn,#ota-latest-action .btn{width:100%;height:58px;margin-top:12px;justify-content:center;font-size:20px}
 #ota-latest-action:empty{display:none}
-.update-actions{display:flex;gap:12px;margin-top:22px}
-.update-actions .btn{height:50px;padding:0 22px;font-size:18px}
+.update-actions{display:flex;gap:12px;margin-top:26px}
+.update-actions .btn{flex:1;height:52px;padding:0 16px;justify-content:center;font-size:17px}
+#update-modal .btn.is-on{background:var(--sage);color:var(--forest);border-color:var(--forest)}

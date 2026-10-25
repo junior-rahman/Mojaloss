@@ -695,7 +695,7 @@
       }
     };
   }
-  function curVer() { return (window.MLTV_OTA && MLTV_OTA.version()) || '0.1.39'; }
+  function curVer() { return (window.MLTV_OTA && MLTV_OTA.version()) || '0.1.40'; }
   function topbar(extra) { return '<div class="top"><div class="brand"><i></i>MojaLoss <span class="ver-badge" id="ver-badge">v' + h(curVer()) + '</span></div><div class="actions">' + (extra || '') + '</div></div>'; }
 
   /* In-app OTA Update modal, quota-safe storage & automatic OTA updates */
@@ -779,19 +779,20 @@
       m.className = "modal-backdrop";
       (document.getElementById("root") || document.body).appendChild(m);
     }
-    var st = window.MLTV_OTA ? MLTV_OTA.state() : { activeVersion: "0.1.39", activeSource: "builtin", builtinVersion: "0.1.39", pin: null };
+    var st = window.MLTV_OTA ? MLTV_OTA.state() : { activeVersion: "0.1.40", activeSource: "builtin", builtinVersion: "0.1.40", pin: null };
     var autoOn = isAutoUpdateOn();
-    m.innerHTML = "<div class=\"modal-card update-card glass\">" +
-      "<div class=\"update-kicker\">Latest version</div>" +
+    m.innerHTML = "<div class=\"modal-card update-card\">" +
+      "<div class=\"update-top\"><div class=\"brand\"><i></i>MojaLoss</div><div class=\"update-kicker\">Update</div></div>" +
       "<h1 class=\"update-ver\" id=\"ota-latest-ver\">v" + h(st.activeVersion) + "</h1>" +
       "<p class=\"update-lead\" id=\"ota-modal-status\">Loading versions…</p>" +
       "<div id=\"ota-latest-action\"></div>" +
+      "<div class=\"update-rule\"></div>" +
       "<div class=\"ver-head\">Last version</div>" +
       "<div id=\"ota-last\"></div>" +
       "<div id=\"ota-older\" hidden></div>" +
       "<div class=\"update-actions\">" +
       "<div class=\"btn focusable\" id=\"ota-show-older\">Other versions</div>" +
-      "<div class=\"btn focusable\" id=\"ota-auto-toggle\">Auto-Update " + (autoOn ? "On" : "Off") + "</div>" +
+      "<div class=\"btn focusable" + (autoOn ? " is-on" : "") + "\" id=\"ota-auto-toggle\">Auto-Update " + (autoOn ? "On" : "Off") + "</div>" +
       "<div class=\"btn focusable\" id=\"ota-modal-close\">Close</div>" +
       "</div></div>";
     function say(text) {
@@ -885,6 +886,7 @@
       var next = !isAutoUpdateOn();
       setAutoUpdateOn(next);
       this.textContent = "Auto-Update " + (next ? "On" : "Off");
+      if (next) this.classList.add("is-on"); else this.classList.remove("is-on");
     };
     document.getElementById("ota-modal-close").onclick = closeUpdateModal;
     if (window.MLTV_OTA && MLTV_OTA.listVersions) {
