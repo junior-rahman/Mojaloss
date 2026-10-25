@@ -150,7 +150,7 @@
     if (!screen || (screen.name !== 'home' && screen.name !== 'platform' && screen.name !== 'detail')) return;
     bgTrailerItem = it;
     var mySeq = ++bgTrailerSeq;
-    var delayMs = window.__mltvTrailerDelayMs || 10000;
+    var delayMs = window.__mltvTrailerDelayMs || 3000;
     bgTrailerTimer = setTimeout(function () {
       bgTrailerTimer = null;
       if (mySeq === bgTrailerSeq && !player) startBgPreviewNow(it, mySeq);
@@ -566,7 +566,7 @@
       }
     };
   }
-  function curVer() { return (window.MLTV_OTA && MLTV_OTA.version()) || '0.1.29'; }
+  function curVer() { return (window.MLTV_OTA && MLTV_OTA.version()) || '0.1.30'; }
   function topbar(extra) { return '<div class="top"><div class="brand"><i></i>MojaLoss <span class="ver-badge" id="ver-badge">v' + h(curVer()) + '</span></div><div class="actions">' + (extra || '') + '</div></div>'; }
 
   /* In-app OTA Update modal, quota-safe storage & automatic OTA updates */
@@ -645,7 +645,7 @@
       m.className = "modal-backdrop";
       document.body.appendChild(m);
     }
-    var st = window.MLTV_OTA ? MLTV_OTA.state() : { activeVersion: "0.1.29", activeSource: "builtin", builtinVersion: "0.1.29" };
+    var st = window.MLTV_OTA ? MLTV_OTA.state() : { activeVersion: "0.1.30", activeSource: "builtin", builtinVersion: "0.1.30" };
     var avail = st.availableUpdate;
     var autoOn = isAutoUpdateOn();
     var statusHtml = st.updating ? "Downloading & installing update package…" :
