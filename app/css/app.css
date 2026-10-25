@@ -325,7 +325,7 @@ video::cue{background:rgba(10,18,14,.84);color:#F4F1EA;font-size:38px;font-weigh
 .ver-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:10px 10px 10px 18px;border-radius:16px;background:var(--low);border:1px solid var(--rim)}
 .ver-row.is-current{border-color:var(--forest)}
 .ver-meta{display:flex;flex-direction:column;gap:2px;min-width:0}
-.ver-meta b{font-size:22px;font-weight:700}
+.ver-meta b{font-size:22px;font-weight:700;white-space:nowrap}
 .ver-meta span{font-size:16px;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:560px}
 .ver-now{height:46px;padding:0 18px;display:flex;align-items:center;font-size:16px;font-weight:700;color:var(--forest)}
 .ver-use{height:46px;padding:0 18px}

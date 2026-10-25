@@ -695,7 +695,7 @@
       }
     };
   }
-  function curVer() { return (window.MLTV_OTA && MLTV_OTA.version()) || '0.1.32'; }
+  function curVer() { return (window.MLTV_OTA && MLTV_OTA.version()) || '0.1.33'; }
   function topbar(extra) { return '<div class="top"><div class="brand"><i></i>MojaLoss <span class="ver-badge" id="ver-badge">v' + h(curVer()) + '</span></div><div class="actions">' + (extra || '') + '</div></div>'; }
 
   /* In-app OTA Update modal, quota-safe storage & automatic OTA updates */
@@ -775,7 +775,7 @@
       m.className = "modal-backdrop";
       (document.getElementById("root") || document.body).appendChild(m);
     }
-    var st = window.MLTV_OTA ? MLTV_OTA.state() : { activeVersion: "0.1.32", activeSource: "builtin", builtinVersion: "0.1.32", pin: null };
+    var st = window.MLTV_OTA ? MLTV_OTA.state() : { activeVersion: "0.1.33", activeSource: "builtin", builtinVersion: "0.1.33", pin: null };
     var avail = st.availableUpdate;
     var autoOn = isAutoUpdateOn();
     var pin = st.pin;
@@ -981,8 +981,8 @@
     }
     function releasesUrl() {
       var mock = param("mock");
-      if (mock) return mock.replace(/\/$/, "") + "/ota/releases";
-      return "https://api.github.com/repos/junior-rahman/Mojaloss/releases?per_page=30";
+      if (mock) return mock.replace(/\/$/, "") + "/ota/versions";
+      return "https://raw.githubusercontent.com/junior-rahman/Mojaloss/tv-ota/tv-versions.json";
     }
     function applyVersionChoice(entry, asLatest) {
       if (asLatest) { writeVersionPin(null); setAutoUpdateOn(true); }
@@ -1005,6 +1005,7 @@
         if (v.bundleUrl && !prev.bundleUrl) prev.bundleUrl = v.bundleUrl;
       }
       add({ version: st.builtinVersion, versionCode: st.builtinVersionCode, notes: "Copy saved on this TV", builtin: true });
+      add({ version: st.activeVersion, versionCode: st.activeVersionCode, notes: "" });
       return fetch(releasesUrl(), { cache: "no-store" }).then(function (r) {
         if (!r.ok) throw new Error("HTTP " + r.status);
         return r.json();
@@ -1013,12 +1014,17 @@
         var list = [];
         for (var k in map) if (Object.prototype.hasOwnProperty.call(map, k)) list.push(map[k]);
         list.sort(function (a, b) { return b.versionCode - a.versionCode; });
-        if (list.length) list[0].latest = true;
+        var kept = [];
+        var builtinRow = null;
         for (var n = 0; n < list.length; n++) {
           list[n].current = list[n].versionCode === st.activeVersionCode;
           list[n].blocked = list[n].versionCode < st.builtinVersionCode && !supportsOlderBoot;
+          if (list[n].builtin) builtinRow = list[n];
+          if (kept.length < 8) kept.push(list[n]);
         }
-        return list;
+        if (builtinRow && kept.indexOf(builtinRow) < 0) kept.push(builtinRow);
+        if (kept.length) kept[0].latest = true;
+        return kept;
       });
     };
     MLTV_OTA.useVersion = function (entry) {
