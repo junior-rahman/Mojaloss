@@ -25,9 +25,9 @@ const state = { revoked: false, favs: { it2: true }, played: {}, reports: [], di
 function makeOtaBundle(mode) {
   const base = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'dist', 'tv-ota-bundle.json'), 'utf8'));
   if (mode === 'none') return base; // v0.1.9 (versionCode 9) -> no update
-  const ver = '0.1.29', vcode = 29;
+  const ver = '0.1.30', vcode = 30;
   let css = base.css + '\n.ver-badge{border-color:#B4D2BD}';
-  let js = base.js.replace(/0\.1\.28/g, '0.1.29');
+  let js = base.js.replace(/0\.1\.29/g, '0.1.30');
   if (mode === 'crash') {
     js = 'throw new Error("Simulated OTA boot crash in 0.1.10");';
   }

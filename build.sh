@@ -69,11 +69,13 @@ def minify_js(j):
         res = res.replace(old_s, new_s)
     def trim_cat_overview(m):
         prefix, ov, suffix = m.group(1), m.group(2), m.group(3)
-        if len(ov) > 52:
-            cut = ov[:49].rsplit(" ", 1)[0].rstrip(".,;:") + "."
+        if len(ov) > 36:
+            cut = ov[:33].rsplit(" ", 1)[0].rstrip(".,;:") + "."
             return prefix + cut + suffix
         return m.group(0)
-    res = re.sub(r"(_c\([^\n]*?,\[[^\]]*\],')([^']{53,})(',[0-9])", trim_cat_overview, res)
+    res = re.sub(r"(_c\([^\n]*?,\[[^\]]*\],')((?:\\'|[^']){37,})(',[0-9])", trim_cat_overview, res)
+    res = res.replace("https://www.mojaloss.stream/wp-content/uploads/", "/wp-content/uploads/")
+    res = re.sub(r'\n\s*', '\n', res)
     return res
 
 s = minify_css(s)
