@@ -136,7 +136,9 @@ data class PlaybackDescriptor(
     val resumeMs: Long = 0,
     val audioTracks: List<TrackOption> = emptyList(),
     val subtitleTracks: List<TrackOption> = emptyList(),
-    val offlineCacheKey: String? = null
+    val offlineCacheKey: String? = null,
+    /** The original file is streamed unchanged; a decoder failure can fall back to a transcode. */
+    val isDirectPlay: Boolean = false
 )
 data class PlaybackSnapshot(
     val mediaId: String? = null,

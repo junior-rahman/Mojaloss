@@ -2,12 +2,16 @@ package com.mojaloss.core.data
 
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.util.AtomicFile
 import com.mojaloss.core.model.AppPreferences
+import org.json.JSONException
 import org.json.JSONObject
 import java.io.File
+import java.io.FileNotFoundException
 import java.security.KeyStore
+import javax.crypto.BadPaddingException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -50,7 +54,15 @@ internal class PrivateStorage(context: Context) {
         val json = JSONObject(plain.decodeToString())
         plain.fill(0)
         StoredSession(json.getString("server"), json.getString("account"), json.getString("token"))
-    } catch (_: Exception) { sessionFile.delete(); null }
+    } catch (_: FileNotFoundException) { null }
+    catch (failure: Exception) {
+        // Delete only a session that can never be read again: corrupt bytes, or a lost or
+        // invalidated key. A transient Keystore or file error must not sign the viewer out.
+        if (failure is BadPaddingException || failure is KeyPermanentlyInvalidatedException ||
+            failure is JSONException || failure is IllegalArgumentException || failure is NoSuchElementException)
+            sessionFile.delete()
+        null
+    }
 
     @Synchronized fun clearSession() { sessionFile.delete() }
     @Synchronized fun preferences(): AppPreferences = try {

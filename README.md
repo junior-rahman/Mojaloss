@@ -41,7 +41,7 @@ and physical camera-cutout behavior still need phone acceptance.
 
 Check for updates is available in Settings and Connect. Download and installation
 require explicit taps; APK size, digest, package, version and signer must match.
-The public source destination is **JuelHossain/Mojaloss**. A public update feed
+The public source destination is **junior-rahman/Mojaloss**. A public update feed
 requires matching APK and update.json release assets; source upload alone does
 not publish that feed. See [release setup](docs/GITHUB_RELEASES.md).
 
@@ -64,6 +64,10 @@ includes Gradle 8.13's checksum-pinned wrapper.
   :core:downloads:assembleDebugAndroidTest
 ./gradlew :app:connectedDebugAndroidTest
 ```
+
+GitHub Actions runs the same debug build, JVM unit tests and instrumented-test
+compilation on every push to `main` and every pull request
+(`.github/workflows/android-ci.yml`). Instrumented tests still need a device or emulator.
 
 `python3 scripts/run-gradle.py <tasks>` is available for environments where Java
 needs to receive the standard `HTTP_PROXY` / `HTTPS_PROXY` settings explicitly.

@@ -40,13 +40,20 @@ internal object AppUpdatePolicy {
 
     fun validComponent(value: String): Boolean = component.matches(value) && value != "." && value != ".."
 
+    /**
+     * GitHub owner and repository names are case-insensitive, and release asset URLs use the
+     * repository's own spelling. Tag and asset names must match exactly.
+     */
     fun exactAssetUrl(url: String, owner: String, repo: String, tag: String, asset: String): Boolean =
         validComponent(owner) && validComponent(repo) && validComponent(tag) && validComponent(asset) &&
             runCatching {
                 val uri = URI(url)
+                val path = uri.rawPath.split('/')
                 uri.scheme == "https" && uri.host == "github.com" && uri.port == -1 &&
                     uri.userInfo == null && uri.query == null && uri.fragment == null &&
-                    uri.rawPath == "/$owner/$repo/releases/download/$tag/$asset"
+                    path.size == 7 && path[0].isEmpty() && path[1].equals(owner, ignoreCase = true) &&
+                    path[2].equals(repo, ignoreCase = true) && path[3] == "releases" && path[4] == "download" &&
+                    path[5] == tag && path[6] == asset
             }.getOrDefault(false)
 
     /** Redirects are followed manually without cookies, authorization, or caller headers. */

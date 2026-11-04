@@ -1,0 +1,10 @@
+<resources>
+    <!-- Dark window before the first Compose frame, so dark mode does not flash white on launch. -->
+    <style name="Theme.MojaLoss" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:colorAccent">#B4D2BD</item>
+        <item name="android:windowBackground">#101B17</item>
+    </style>
+</resources>

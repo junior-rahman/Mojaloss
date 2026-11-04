@@ -170,15 +170,15 @@ class CatalogCacheStorageTest {
         Fixture().use { fixture ->
             val home = catalog()
             assertTrue(fixture.storage.save(home))
-            repeat(20) { index ->
+            repeat(40) { index ->
                 assertTrue(fixture.storage.save(home.copy(queryKey = "search-v1-$index")))
             }
             assertEquals(home, fixture.storage.load(SERVER, ACCOUNT))
             val files = File(fixture.directory, "mojaloss").listFiles().orEmpty()
                 .filter { it.name.startsWith("catalog-v2-") }
-            assertEquals(12, files.size)
+            assertEquals(32, files.size)
             assertTrue(files.sumOf { it.length() } <= 24L * 1024 * 1024)
-            assertNotNull(fixture.storage.load(SERVER, ACCOUNT, "search-v1-19"))
+            assertNotNull(fixture.storage.load(SERVER, ACCOUNT, "search-v1-39"))
             files.filter { it != fixture.file }.take(4).forEach { file ->
                 // Sparse files exercise the aggregate byte quota without large fixture allocations.
                 RandomAccessFile(file, "rw").use { it.setLength(8L * 1024 * 1024) }
@@ -187,10 +187,21 @@ class CatalogCacheStorageTest {
             assertTrue(fixture.storage.save(current))
             val boundedFiles = File(fixture.directory, "mojaloss").listFiles().orEmpty()
                 .filter { it.name.startsWith("catalog-v2-") }
-            assertTrue(boundedFiles.size <= 12)
+            assertTrue(boundedFiles.size <= 32)
             assertTrue(boundedFiles.sumOf { it.length() } <= 24L * 1024 * 1024)
             assertEquals(home, fixture.storage.load(SERVER, ACCOUNT))
             assertEquals(current, fixture.storage.load(SERVER, ACCOUNT, current.queryKey))
+        }
+    }
+
+    @Test fun queryCacheQuotaRetainsCurrentHomeFeed() {
+        Fixture().use { fixture ->
+            val home = catalog().copy(queryKey = HOME_CATALOG_QUERY_KEY)
+            assertTrue(fixture.storage.save(home))
+            repeat(40) { index ->
+                assertTrue(fixture.storage.save(home.copy(queryKey = "home-shelf-row-v1-$index")))
+            }
+            assertEquals(home, fixture.storage.load(SERVER, ACCOUNT, HOME_CATALOG_QUERY_KEY))
         }
     }
 

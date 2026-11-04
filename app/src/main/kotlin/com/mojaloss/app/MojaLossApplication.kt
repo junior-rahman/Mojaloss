@@ -31,8 +31,9 @@ import java.security.MessageDigest
 class MojaLossApplication : Application(), SingletonImageLoader.Factory, DownloadRuntimeProvider {
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val diagnostics by lazy { SafeDiagnostics(this, "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})") }
-    val repository by lazy { JellyfinMediaRepository(this, appScope, onConnectionDiagnostic = diagnostics::recordConnection) }
-    val appUpdater by lazy { AppUpdateManager(this, appScope, owner = "JuelHossain", repo = "MojaLoss") }
+    val repository by lazy { JellyfinMediaRepository(this, appScope, onConnectionDiagnostic = diagnostics::recordConnection,
+        clientVersion = BuildConfig.VERSION_NAME) }
+    val appUpdater by lazy { AppUpdateManager(this, appScope, owner = AppUpdateManager.DEFAULT_OWNER, repo = AppUpdateManager.DEFAULT_REPO) }
 
     override val offlineDownloads by lazy { OfflineDownloads(this, appScope, repository::downloadAuthorization) }
 

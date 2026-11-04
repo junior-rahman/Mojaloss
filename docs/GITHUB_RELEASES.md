@@ -1,16 +1,20 @@
 # GitHub source and app updates
 
-The confirmed public repository is **JuelHossain/Mojaloss**. The customer requires
+The confirmed public repository is **junior-rahman/Mojaloss**. The customer requires
 GitHub operations through MCP. The connected MCP tools can upload source to this
 existing repository. They do not currently expose release creation or release-asset
 uploads. Source publication and an operational APK update feed are separate results.
 Do not report a feed live until the release and exact asset bytes are verified.
 
+Builds up to 0.1.8 check `JuelHossain/MojaLoss`, which does not resolve to this
+repository, so they cannot find updates here. Install the first build that targets
+this repository manually over the old app (same signer); later updates then work in-app.
+
 ## Release identity
 
 | Item | Current build |
 | --- | --- |
-| Repository | `JuelHossain/Mojaloss` |
+| Repository | `junior-rahman/Mojaloss` |
 | Intended stable tag | `v0.1.8` |
 | APK asset | `MojaLoss-Sage-0.1.8-debug.apk` |
 | Application ID | `com.mojaloss.android.debug` |
@@ -64,9 +68,9 @@ When an authorized MCP capability supports the missing release operations:
 2. Attach the frozen signed APK and its matching update.json to the same release.
 3. Read back names, byte lengths and available sha256 digests, then publish stable
    (not draft or prerelease), with the intended release marked latest.
-4. Read back `https://api.github.com/repos/JuelHossain/Mojaloss/releases/latest`.
+4. Read back `https://api.github.com/repos/junior-rahman/Mojaloss/releases/latest`.
    Require exact asset paths under
-   `https://github.com/JuelHossain/Mojaloss/releases/download/v0.1.8/`.
+   `https://github.com/junior-rahman/Mojaloss/releases/download/v0.1.8/`.
    Verify public downloaded bytes against the frozen assets before claiming success.
 5. Test from a same-signer previous build: Check for updates, Download, verification,
    explicit Install update, Android confirmation; then confirm installed version

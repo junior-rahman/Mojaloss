@@ -44,9 +44,15 @@ import kotlin.coroutines.coroutineContext
 class AppUpdateManager(
     context: Context,
     private val scope: CoroutineScope,
-    private val owner: String = "JuelHossain",
-    private val repo: String = "Mojaloss",
+    private val owner: String = DEFAULT_OWNER,
+    private val repo: String = DEFAULT_REPO,
 ) {
+    companion object {
+        /** The repository whose latest stable release publishes the APK and update.json. */
+        const val DEFAULT_OWNER = "junior-rahman"
+        const val DEFAULT_REPO = "Mojaloss"
+    }
+
     private val app = context.applicationContext
     private val json = Json { ignoreUnknownKeys = true }
     private val connection = AtomicReference<HttpURLConnection?>(null)

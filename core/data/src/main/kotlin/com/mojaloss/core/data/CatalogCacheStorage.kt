@@ -19,6 +19,9 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
+/** The current Home catalog query key. Bump it whenever Home's server order changes. */
+internal const val HOME_CATALOG_QUERY_KEY = "home-v4-release-year"
+
 /** Previously observed catalog data, never a substitute for confirming a service mutation. */
 internal data class CachedCatalog(
     val serverUrl: String,
@@ -145,7 +148,10 @@ internal class CatalogCacheStorage(context: Context) {
         val groups = files.groupBy { it.name.removeSuffix(".bak").removeSuffix(".new") }
         var count = groups.size
         var bytes = files.sumOf { it.length() }
-        val homeNames = setOf(queryFile("home-v1").baseFile.name, queryFile("home-v2-recent").baseFile.name)
+        // The cold-open Home feed is never evicted for other queries. Legacy names stay protected
+        // until the repository deletes them after saving the current Home.
+        val homeNames = setOf(queryFile(HOME_CATALOG_QUERY_KEY).baseFile.name,
+            queryFile("home-v1").baseFile.name, queryFile("home-v2-recent").baseFile.name)
         groups.entries.filter { it.key !in homeNames && it.key != savedName }
             .sortedBy { entry -> entry.value.maxOf { it.lastModified() } }
             .forEach { (name, entries) ->
@@ -268,7 +274,9 @@ internal class CatalogCacheStorage(context: Context) {
         const val MAX_FILE_BYTES = MAX_PLAIN_BYTES + 5 + IV_SIZE + 16
         const val MIN_FILE_BYTES = 5L + IV_SIZE + 16
         const val MAX_TITLES = 50_000
-        const val MAX_QUERIES = 12
+        // Home alone keeps about 15 small files (feed, resume, uploads, row sources, rows);
+        // the aggregate byte quota below remains the real storage bound.
+        const val MAX_QUERIES = 32
         const val MAX_AGGREGATE_BYTES = 24L * 1024 * 1024
         val HEADER = byteArrayOf('M'.code.toByte(), 'J'.code.toByte(), 'C'.code.toByte(), 'A'.code.toByte(), VERSION.toByte())
         val STORAGE_LOCK = Any()
