@@ -9,6 +9,9 @@ import com.mojaloss.core.model.*
 import com.mojaloss.core.player.Media3MainPlayerController
 import com.mojaloss.core.downloads.OfflineDownloads
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.Job
@@ -25,6 +28,11 @@ class AppViewModel(
     val repository: MediaRepository,
     private val applicationContext: Context,
     private val offlineDownloads: OfflineDownloads? = null,
+    /**
+     * Playback reports outlive this ViewModel: the final "stopped" sample is sent while the
+     * ViewModel is being cleared, when viewModelScope is already cancelled.
+     */
+    private val reportingScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
 ) : ViewModel() {
     val downloadLibrary: StateFlow<DownloadLibrary> = offlineDownloads?.library
         ?: MutableStateFlow(DownloadLibrary(initialized = true, message = "Downloads are unavailable in this preview."))
@@ -294,8 +302,18 @@ class AppViewModel(
                     is OperationResult.Success -> {
                         if (operation != playbackGeneration || initialScope !=
                             (repository.session.value as? SessionState.Connected)?.scope) return@launch
-                        val controller = Media3MainPlayerController(applicationContext, viewModelScope) { observation ->
-                            viewModelScope.launch {
+                        val controller = Media3MainPlayerController(applicationContext, viewModelScope,
+                            compatibleSource = { failed ->
+                                // This device could not decode the original file: ask once for a converted stream.
+                                when (val compatible = repository.prepareCompatiblePlayback(failed.title.id, fromStart)) {
+                                    is OperationResult.Success -> compatible.value.takeIf {
+                                        operation == playbackGeneration && it.sessionScope == initialScope &&
+                                            currentScope() == initialScope
+                                    }
+                                    is OperationResult.Failure -> null
+                                }
+                            }) { observation ->
+                            reportingScope.launch {
                                 repository.reportPlayback(observation)
                                 if (currentScope() == observation.scope) repository.confirmedProgress(observation.mediaId)
                                     ?.let { updateConfirmedProgress(observation.mediaId, it) }

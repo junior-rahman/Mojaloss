@@ -38,6 +38,8 @@ class JellyfinMediaRepository(
     private val apiClientFactory: ((baseUrl: String, accessToken: String?) -> ApiClient)? = null,
     private val catalogLoadOptions: CatalogLoadOptions = CatalogLoadOptions(),
     private val downloadCodecProbe: (container: String, streams: List<MediaStream>) -> Boolean = ::deviceSupportsDownload,
+    /** Reported to the server as this client's version; the app passes its real build version. */
+    private val clientVersion: String = "0.1.8",
 ) : MediaRepository {
     private val applicationContext = context.applicationContext
     private val storage = PrivateStorage(applicationContext)
@@ -92,6 +94,12 @@ class JellyfinMediaRepository(
     private val resumeCache = ConcurrentHashMap<String, TimedTitles>()
     private val genreCache = linkedMapOf<String, TimedGenres>()
     @Volatile private var collectionCache: TimedCollections? = null
+    /** Measured once per process: decoder capabilities do not change while the app runs. */
+    private val deviceStreamingProfile by lazy {
+        try { streamingProfile(probeDeviceCodecs()) }
+        catch (_: Exception) { CONSERVATIVE_STREAMING_PROFILE }
+        catch (_: LinkageError) { CONSERVATIVE_STREAMING_PROFILE }
+    }
 
     private data class TimedTitles(val scope: SessionScope, val at: Long, val titles: List<MediaTitle>)
     private data class TimedGenres(val scope: SessionScope, val at: Long, val values: List<String>)
@@ -248,7 +256,11 @@ class JellyfinMediaRepository(
     }
 
     override suspend fun signOut() = withContext(Dispatchers.IO) {
-        synchronized(sessionLock) {
+        val revocable = synchronized(sessionLock) {
+            // Keep this device's client before local state is cleared, so the server can end it.
+            val client = active?.api ?: try {
+                storage.loadSession()?.let { saved -> api(ServerUrls.normalize(saved.serverUrl), saved.token) }
+            } catch (_: Exception) { null } catch (_: LinkageError) { null }
             generations.incrementAndGet()
             connectionJob?.cancel()
             inFlight.keys.forEach { it.cancel() }
@@ -262,8 +274,21 @@ class JellyfinMediaRepository(
             mutableSession.value = SessionState.SignedOut
             storage.clearSession()
             catalogStorage.clear()
+            client
         }
-        // No service history deletion and no silent replacement of a provider session.
+        // Local sign-out never waits for the network. Ending the server session revokes only this
+        // device's access token; viewing history and the account itself stay on the server.
+        revocable?.let { client ->
+            scope.launch(Dispatchers.IO) {
+                withTimeoutOrNull(5_000) {
+                    try { client.sessionApi.reportSessionEnded() }
+                    catch (e: CancellationException) { throw e }
+                    catch (_: Exception) { }
+                    catch (_: LinkageError) { }
+                }
+            }
+        }
+        Unit
     }
 
     override suspend fun initialize() {
@@ -336,14 +361,14 @@ class JellyfinMediaRepository(
     override suspend fun homeResume(kind: MediaKind?, force: Boolean): OperationResult<List<MediaTitle>> = sessionIo {
         val pending = session.value as? SessionState.Restoring
         if (active == null && pending != null) {
-            val key = "home-resume-v1|${kind?.name.orEmpty()}"
+            val key = resumeKey(kind)
             val disk = catalogStorage.load(pending.scope.serverUrl, pending.account.id, key)
             return@sessionIo if (disk != null && generations.get() == pending.scope.generation && session.value == pending)
                 OperationResult.Success(cachedSnapshot(disk, null, CatalogQuery(), verified = false).titles.take(RESUME_LIMIT).map { it.copy(isPlayable = false) })
             else OperationResult.Failure("Reconnect your account to load Continue watching.")
         }
         request("Could not update Continue watching.") { connected -> resumeMutex.withLock {
-            val key = "home-resume-v1|${kind?.name.orEmpty()}"
+            val key = resumeKey(kind)
             val now = System.currentTimeMillis()
             val remembered = resumeCache[key]?.takeIf { it.scope == connected.scope }
             if (!force && remembered != null && now - remembered.at in 0 until RESUME_FRESHNESS_MILLIS)
@@ -367,10 +392,9 @@ class JellyfinMediaRepository(
                 ).content
             }
             require(result.items.size <= RESUME_LIMIT) { "The service exceeded the Continue watching limit." }
-            // This endpoint has no sort parameter in the pinned SDK. Reorder only the small
-            // authoritative resume response; never infer progress from release order.
-            val values = result.items.sortedWith(compareByDescending<BaseItemDto> { it.premiereDate }.thenBy { it.sortName ?: it.name })
-                .map { title(it, connected) }.distinctBy { it.id }
+            // The server returns resumable items most recently watched first. Keep that order:
+            // re-sorting by release date put an older viewing ahead of the one just watched.
+            val values = result.items.map { title(it, connected) }.distinctBy { it.id }
                 .filter { it.confirmedResumeMs > 0 && it.kind != MediaKind.SERIES }
             val recordedAt = System.currentTimeMillis()
             publishCurrent(connected) {
@@ -389,7 +413,7 @@ class JellyfinMediaRepository(
     override suspend fun homeRecentUploads(force: Boolean): OperationResult<List<MediaTitle>> = sessionIo {
         val pending = session.value as? SessionState.Restoring
         if (active == null && pending != null) {
-            val disk = catalogStorage.load(pending.scope.serverUrl, pending.account.id, "home-recent-uploads-v1")
+            val disk = catalogStorage.load(pending.scope.serverUrl, pending.account.id, RECENT_UPLOADS_KEY)
             return@sessionIo if (disk != null && disk.titles.size <= RECENT_UPLOADS_LIMIT &&
                 generations.get() == pending.scope.generation && session.value == pending)
                 OperationResult.Success(cachedSnapshot(disk, null, CatalogQuery(), verified = false).titles.map { it.copy(isPlayable = false) })
@@ -400,7 +424,7 @@ class JellyfinMediaRepository(
             val memory = recentUploadsCache?.takeIf { it.scope == connected.scope }
             if (!force && memory != null && now - memory.at in 0 until CATALOG_FRESHNESS_MILLIS)
                 return@withLock memory.titles
-            val key = "home-recent-uploads-v1"
+            val key = RECENT_UPLOADS_KEY
             val disk = if (force) null else catalogStorage.load(connected.scope.serverUrl, connected.account.id, key)
             if (disk != null && disk.titles.size <= RECENT_UPLOADS_LIMIT && now - disk.savedAtEpochMs in 0 until CATALOG_FRESHNESS_MILLIS) {
                 val values = cachedSnapshot(disk, connected, CatalogQuery(), verified = true).titles
@@ -549,7 +573,7 @@ class JellyfinMediaRepository(
 
     private suspend fun shelfCategorySources(connected: ActiveSession, kind: HomeShelfKind, force: Boolean): List<PlatformCollection> {
         val term = shelfMetadataTerm(kind)
-        val key = "home-shelf-sources-v1|$term"
+        val key = shelfSourcesKey(term)
         val now = System.currentTimeMillis()
         val remembered = shelfMetadataCache[term]?.takeIf { it.scope == connected.scope }
         val values = if (!force && remembered != null && now - remembered.at in 0 until CATALOG_FRESHNESS_MILLIS) remembered.values else {
@@ -584,7 +608,7 @@ class JellyfinMediaRepository(
     /** /UserViews returns directory metadata, not playable titles. Some visible virtual library
      * views are not returned by a recursive /Items BoxSet/Folder text search. */
     private suspend fun languageLibraryViews(connected: ActiveSession, force: Boolean): List<PlatformCollection> {
-        val key = "home-language-library-views-v1"
+        val key = LIBRARY_VIEWS_KEY
         val now = System.currentTimeMillis()
         val remembered = libraryViewsCache?.takeIf { it.scope == connected.scope }
         if (!force && remembered != null && now - remembered.at in 0 until CATALOG_FRESHNESS_MILLIS)
@@ -1212,9 +1236,7 @@ class JellyfinMediaRepository(
 
     private fun invalidateResumeCache(connected: ActiveSession) {
         resumeCache.clear()
-        listOf(null, MediaKind.MOVIE, MediaKind.SERIES, MediaKind.EPISODE).forEach { kind ->
-            catalogStorage.deleteQuery("home-resume-v1|${kind?.name.orEmpty()}")
-        }
+        RESUME_KINDS.forEach { kind -> catalogStorage.deleteQuery(resumeKey(kind)) }
     }
 
     override suspend fun setFavorite(id: String, desired: Boolean): OperationResult<Boolean> = sessionIo {
@@ -1238,12 +1260,14 @@ class JellyfinMediaRepository(
                 mutableCatalog.update { it.copy(titles = it.titles.map { title -> if (title.id == id) title.copy(favorite = confirmed) else title }) }
                 updateRememberedTitles { if (it.id == id) it.copy(favorite = confirmed) else it }
                 if (changed) {
-                    // A membership change shifts every following raw offset in server favorites.
-                    // Home's order/cursor stay valid; preserve its cold-open cache and update
-                    // only the favorite read back from the service.
-                    val home = catalogStorage.load(connected.scope.serverUrl, connected.account.id, queryKey(CatalogQuery()))
+                    // A membership change shifts every following raw offset in server favorites,
+                    // so paged query caches are dropped. Home-feed caches whose order and cursor
+                    // do not depend on favorites stay, with only this title's read-back state updated.
+                    val kept = (listOf(queryKey(CatalogQuery()), RECENT_UPLOADS_KEY, LIBRARY_VIEWS_KEY) +
+                        RESUME_KINDS.map(::resumeKey) + HomeShelfKind.entries.map { shelfSourcesKey(shelfMetadataTerm(it)) })
+                        .distinct().mapNotNull { key -> catalogStorage.load(connected.scope.serverUrl, connected.account.id, key) }
                     catalogStorage.clear()
-                    home?.let { catalogStorage.save(it.copy(titles = it.titles.map { title ->
+                    kept.forEach { cached -> catalogStorage.save(cached.copy(titles = cached.titles.map { title ->
                         if (title.id == id) title.copy(favorite = confirmed) else title
                     })) }
                     if (activeQuery.destination == Destination.MY_LIST) {
@@ -1327,7 +1351,14 @@ class JellyfinMediaRepository(
         }
     }
 
-    override suspend fun preparePlayback(id: String, fromStart: Boolean): OperationResult<PlaybackDescriptor> = request("Could not prepare this video.") { connected ->
+    override suspend fun preparePlayback(id: String, fromStart: Boolean): OperationResult<PlaybackDescriptor> =
+        preparePlayback(id, fromStart, allowDirectPlay = true)
+
+    /** The player asks for this after the device could not decode a direct-play file. */
+    override suspend fun prepareCompatiblePlayback(id: String, fromStart: Boolean): OperationResult<PlaybackDescriptor> =
+        preparePlayback(id, fromStart, allowDirectPlay = false)
+
+    private suspend fun preparePlayback(id: String, fromStart: Boolean, allowDirectPlay: Boolean): OperationResult<PlaybackDescriptor> = request("Could not prepare this video.") { connected ->
         // An already-dispatched old stop must complete before a fresh same-title session is prepared.
         progressMutex.withLock {
             val itemId = UUID.fromString(id)
@@ -1336,9 +1367,15 @@ class JellyfinMediaRepository(
             if (!mapped.isPlayable) throw UserVisibleFailure("This title is not available to play.")
             if (!isCurrent(connected)) throw CancellationException("Account changed")
             val resume = if (fromStart) 0L else mapped.confirmedResumeMs
+            // A transcode carries one audio track, chosen by the server. Ask for the viewer's
+            // language when the single version has it; otherwise the server default stays.
+            val preferredAudio = item.mediaSources.orEmpty().singleOrNull()?.mediaStreams.orEmpty()
+                .filter { it.type == MediaStreamType.AUDIO }.map { it.index to it.language }
+                .let { preferredAudioIndex(it, mutablePreferences.value.audioLanguage) }
             val info = connected.api.mediaInfoApi.getPostedPlaybackInfo(itemId, PlaybackInfoDto(
-                userId = UUID.fromString(connected.account.id), deviceProfile = profile,
-                startTimeTicks = ticks(resume), enableDirectPlay = true, enableDirectStream = false,
+                userId = UUID.fromString(connected.account.id), deviceProfile = deviceStreamingProfile,
+                startTimeTicks = ticks(resume), audioStreamIndex = preferredAudio,
+                enableDirectPlay = allowDirectPlay, enableDirectStream = false,
                 enableTranscoding = true, autoOpenLiveStream = false, maxAudioChannels = 2
             )).content
             if (!isCurrent(connected)) throw CancellationException("Account changed")
@@ -1358,16 +1395,23 @@ class JellyfinMediaRepository(
                 mapOf("X-Emby-Token" to requireNotNull(connected.api.accessToken))
             val streams = source.mediaStreams.orEmpty()
             val subtitles = streams.filter { it.type == MediaStreamType.SUBTITLE }.mapNotNull { stream ->
-                val mime = subtitleMime(stream.codec)
-                if (stream.isExternal) {
-                    val resource = stream.deliveryUrl?.takeIf { mime != null } ?: return@mapNotNull null
-                    val safe = runCatching { ServerUrls.sameOriginResource(connected.scope.serverUrl, resource) }.getOrNull()
+                val label = stream.displayTitle ?: stream.language ?: "Subtitle ${stream.index}"
+                // Sidecar files always need their delivery URL. Subtitles inside the video file are
+                // read by Media3 during direct play, but a transcode leaves them out of the stream:
+                // the server then offers them separately, as an external delivery URL.
+                val delivered = stream.deliveryUrl?.takeIf { stream.isExternal ||
+                    !direct && stream.deliveryMethod == SubtitleDeliveryMethod.EXTERNAL }
+                if (delivered != null) {
+                    val mime = deliveredSubtitleMime(delivered, stream.codec) ?: return@mapNotNull null
+                    val safe = runCatching { ServerUrls.sameOriginResource(connected.scope.serverUrl, delivered) }.getOrNull()
                         ?: return@mapNotNull null
-                    TrackOption(stream.index.toString(), stream.displayTitle ?: stream.language ?: "Subtitle ${stream.index}", stream.language, safe, mime)
-                } else TrackOption(stream.index.toString(), stream.displayTitle ?: stream.language ?: "Subtitle ${stream.index}", stream.language)
+                    TrackOption(stream.index.toString(), label, stream.language, safe, mime)
+                } else if (stream.isExternal) null
+                else TrackOption(stream.index.toString(), label, stream.language)
             }
             val descriptor = PlaybackDescriptor(mapped, safeUrl, headers, connected.scope, info.playSessionId, source.id, resume,
-                streams.filter { it.type == MediaStreamType.AUDIO }.map { TrackOption(it.index.toString(), it.displayTitle ?: it.language ?: "Audio ${it.index}", it.language) }, subtitles)
+                streams.filter { it.type == MediaStreamType.AUDIO }.map { TrackOption(it.index.toString(), it.displayTitle ?: it.language ?: "Audio ${it.index}", it.language) },
+                subtitles, isDirectPlay = direct)
             publishCurrent(connected) { records[id] = PlaybackRecord(descriptor, if (direct) PlayMethod.DIRECT_PLAY else PlayMethod.TRANSCODE) }
             descriptor
         }
@@ -1502,7 +1546,7 @@ class JellyfinMediaRepository(
 
     private fun api(base: String, token: String? = null): ApiClient = apiClientFactory?.invoke(base, token) ?: createJellyfin {
         context = applicationContext
-        clientInfo = ClientInfo("MojaLoss", "0.1.8")
+        clientInfo = ClientInfo("MojaLoss", clientVersion)
         deviceInfo = DeviceInfo(storage.deviceId(), "MojaLoss on ${Build.MODEL}")
     }.createApi(baseUrl = base, accessToken = token,
         httpClientOptions = HttpClientOptions(followRedirects = false, requestTimeout = 15.seconds, connectTimeout = 6.seconds, socketTimeout = 15.seconds))
@@ -1564,7 +1608,7 @@ class JellyfinMediaRepository(
                 sort = query.filter.sort.takeIf { it in setOf("Title", "Release newest", "Recently added") } ?: "Release newest"),
         )
         private fun queryKey(query: CatalogQuery): String {
-            if (query == CatalogQuery()) return "home-v4-release-year"
+            if (query == CatalogQuery()) return HOME_CATALOG_QUERY_KEY
             val parts = listOf(query.destination.name, query.filter.kind?.name.orEmpty(), query.filter.genre.orEmpty(),
                 query.filter.year?.toString().orEmpty(), query.filter.sort, query.search)
             // A changed release order must never reuse the old cursor or cards. Explicit
@@ -1574,6 +1618,11 @@ class JellyfinMediaRepository(
             val identity = if (version == "catalog-query-v1|") parts else parts + query.parentId.orEmpty()
             return version + identity.joinToString("|") { "${it.length}:$it" }
         }
+        private const val RECENT_UPLOADS_KEY = "home-recent-uploads-v1"
+        private const val LIBRARY_VIEWS_KEY = "home-language-library-views-v1"
+        private val RESUME_KINDS = listOf(null, MediaKind.MOVIE, MediaKind.SERIES, MediaKind.EPISODE)
+        private fun resumeKey(kind: MediaKind?) = "home-resume-v1|${kind?.name.orEmpty()}"
+        private fun shelfSourcesKey(term: String) = "home-shelf-sources-v1|$term"
         private const val CATALOG_FRESHNESS_MILLIS = 10 * 60 * 1_000L
         private const val RESUME_FRESHNESS_MILLIS = 60_000L
         private const val GENRE_FRESHNESS_MILLIS = 60 * 60_000L
@@ -1606,20 +1655,12 @@ class JellyfinMediaRepository(
             error is InvalidStatusException -> "The server could not finish the library request. Retry, or copy the error report."
             else -> "Your library could not finish loading. Retry, or copy the error report."
         }
-        private val profile = DeviceProfile(name = "MojaLoss conservative Media3", directPlayProfiles = listOf(
-            DirectPlayProfile("mp4,m4v", "aac,mp3", "h264", DlnaProfileType.VIDEO)),
-            transcodingProfiles = listOf(TranscodingProfile("ts", DlnaProfileType.VIDEO, "h264", "aac", MediaStreamProtocol.HLS,
-                maxAudioChannels = "2", conditions = emptyList())), containerProfiles = emptyList(), codecProfiles = emptyList(),
-            subtitleProfiles = listOf("srt", "vtt", "ttml").map { SubtitleProfile(it, SubtitleDeliveryMethod.EXTERNAL) })
         private fun imageTag(url: String?): String? = runCatching {
             URI(url ?: return null).rawQuery.orEmpty().split('&').firstOrNull { it.startsWith("tag=") }
                 ?.substringAfter('=')?.let { java.net.URLDecoder.decode(it, "UTF-8") }?.takeIf { it.isNotBlank() }
         }.getOrNull()
         private fun millis(ticks: Long) = (ticks / 10_000).coerceAtLeast(0)
         private fun ticks(ms: Long) = ms.coerceIn(0, Long.MAX_VALUE / 10_000) * 10_000
-        private fun subtitleMime(codec: String?) = when (codec?.lowercase()) {
-            "srt", "subrip" -> "application/x-subrip"; "vtt", "webvtt" -> "text/vtt"; "ttml" -> "application/ttml+xml"; else -> null
-        }
         private fun youtubeId(value: String?): String? = runCatching {
             val url = URI(value ?: return null)
             val host = url.host?.lowercase()?.removePrefix("www.")

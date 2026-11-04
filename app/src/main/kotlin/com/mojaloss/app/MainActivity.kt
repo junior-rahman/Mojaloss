@@ -84,7 +84,8 @@ private fun MojaLossRoot(application: MojaLossApplication) {
         object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                AppViewModel(repository, application.applicationContext, if (preview) null else application.offlineDownloads) as T
+                AppViewModel(repository, application.applicationContext, if (preview) null else application.offlineDownloads,
+                    reportingScope = application.appScope) as T
         }
     }
     val model: AppViewModel = viewModel(key = if (preview) "preview" else "live", factory = factory)

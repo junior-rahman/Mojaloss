@@ -24,6 +24,7 @@ import com.mojaloss.core.model.PlaybackPhase
 import com.mojaloss.core.model.PlaybackRecoveryPolicy
 import com.mojaloss.core.model.PlaybackSnapshot
 import com.mojaloss.core.model.TrackOption
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -40,8 +41,10 @@ import java.util.concurrent.TimeUnit
 @UnstableApi
 class Media3MainPlayerController(
     context: Context,
-    scope: CoroutineScope,
+    private val scope: CoroutineScope,
     private val offlineDataSourceFactory: DataSource.Factory? = null,
+    /** Supplies a server-converted stream after this device could not decode a direct-play file. */
+    private val compatibleSource: (suspend (PlaybackDescriptor) -> PlaybackDescriptor?)? = null,
     private val onObservation: (PlaybackObservation) -> Unit
 ) : MainPlayerController {
     private val httpClient = OkHttpClient.Builder()
@@ -82,6 +85,9 @@ class Media3MainPlayerController(
     private var lastReportAt = 0L
     private var retryCount = 0
     private var timeoutMessage: String? = null
+    private var compatibleRequested = false
+    private var compatiblePending = false
+    private var compatibleJob: Job? = null
     private val samplingJob: Job
 
     init {
@@ -112,11 +118,16 @@ class Media3MainPlayerController(
                 // Time-limited exclusion; an unplayable track cannot suspend recovery forever.
                 trackPreparationUntil = SystemClock.elapsedRealtime() + 2_000
                 progress.resetBaseline()
+                if (CompatibleStreamPolicy.hasUndecodableTrack(
+                        tracks.containsType(C.TRACK_TYPE_VIDEO), tracks.isTypeSupported(C.TRACK_TYPE_VIDEO, true),
+                        tracks.containsType(C.TRACK_TYPE_AUDIO), tracks.isTypeSupported(C.TRACK_TYPE_AUDIO, true)) &&
+                    requestCompatibleStream(UNSUPPORTED_FORMAT_MESSAGE)) return
                 publish()
             }
 
             override fun onPlayerError(error: PlaybackException) {
                 progress.failSeek()
+                if (CompatibleStreamPolicy.isDecodeFailure(error.errorCode) && requestCompatibleStream(errorMessage(error))) return
                 requestedPlay = false
                 publish(errorMessage(error))
                 emitObservation(paused = true)
@@ -147,6 +158,10 @@ class Media3MainPlayerController(
     override fun prepare(descriptor: PlaybackDescriptor, autoPlay: Boolean) {
         checkUsable()
         if (this.descriptor == descriptor && exoPlayer.currentMediaItem != null) return
+        compatibleJob?.cancel()
+        compatibleJob = null
+        compatiblePending = false
+        compatibleRequested = false
         val offline = descriptor.offlineCacheKey
         if (!MediaOriginPolicy(descriptor.sessionScope.serverUrl).allows(descriptor.streamUrl) ||
             (offline != null && (offline.isBlank() || descriptor.headers.isNotEmpty() || offlineDataSourceFactory == null))) {
@@ -313,6 +328,7 @@ class Media3MainPlayerController(
         emitObservation(paused = true, stopped = true)
         descriptor = null
         released = true
+        compatibleJob?.cancel()
         samplingJob.cancel()
         exoPlayer.release()
         httpClient.dispatcher.cancelAll()
@@ -321,7 +337,8 @@ class Media3MainPlayerController(
     }
 
     private fun sample() {
-        if (descriptor == null || released) return
+        // A pending compatible stream replaces this session; its stall timers no longer apply.
+        if (descriptor == null || released || compatiblePending) return
         val now = SystemClock.elapsedRealtime()
         val advancing = progress.observe(exoPlayer.currentPosition, now,
             exoPlayer.isPlaying && appActive && !restoring && now >= trackPreparationUntil)
@@ -343,6 +360,42 @@ class Media3MainPlayerController(
         }
     }
 
+    /**
+     * Switch once to a server-converted stream when this device cannot decode the original file.
+     * The failed server session is closed first; its resume point is kept from observed playback.
+     */
+    private fun requestCompatibleStream(failureMessage: String): Boolean {
+        val failed = descriptor ?: return false
+        val provider = compatibleSource
+        if (released || !CompatibleStreamPolicy.canRequest(failed.isDirectPlay, failed.offlineCacheKey != null,
+                compatibleRequested, provider != null) || provider == null) return false
+        compatibleRequested = true
+        val autoPlay = requestedPlay
+        val resumeAt = progress.lastAdvancingPositionMs
+        requestedPlay = false
+        emitObservation(paused = true, stopped = true)
+        // From here the failed session reports nothing more, including the pause just below.
+        compatiblePending = true
+        exoPlayer.playWhenReady = false
+        publish()
+        compatibleJob = scope.launch(Dispatchers.Main.immediate) {
+            val replacement = try { provider(failed) } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { null }
+            if (released || descriptor !== failed) return@launch
+            compatiblePending = false
+            if (replacement == null || replacement.isDirectPlay || replacement.offlineCacheKey != null ||
+                replacement.title.id != failed.title.id || replacement.sessionScope != failed.sessionScope) {
+                timeoutMessage = failureMessage
+                publish()
+                return@launch
+            }
+            // The failed session was already stopped above; do not report it a second time.
+            descriptor = null
+            prepare(resumeAt?.let { replacement.copy(resumeMs = it) } ?: replacement, autoPlay)
+        }
+        return true
+    }
+
     private fun failWithRecovery(message: String) {
         progress.failSeek()
         requestedPlay = false
@@ -359,6 +412,7 @@ class Media3MainPlayerController(
         stopped: Boolean = false
     ) {
         val source = descriptor ?: return
+        if (compatiblePending) return
         // Terminal cleanup without observed motion retains the service's existing baseline.
         // Play-from-start resumeMs=0 and any requested seek must never reset service progress.
         playbackObservation(source, progress.lastAdvancingPositionMs, paused, advancing, ended, stopped)
@@ -368,8 +422,9 @@ class Media3MainPlayerController(
 
     private fun publish(message: String? = null) {
         if (released || descriptor == null) return
-        val error = message ?: timeoutMessage ?: exoPlayer.playerError?.let(::errorMessage)
+        val error = if (compatiblePending) null else message ?: timeoutMessage ?: exoPlayer.playerError?.let(::errorMessage)
         val phase = when {
+            compatiblePending -> PlaybackPhase.PREPARING
             error != null -> PlaybackPhase.ERROR
             exoPlayer.playbackState == Player.STATE_ENDED -> PlaybackPhase.ENDED
             !exoPlayer.playWhenReady && exoPlayer.playbackState == Player.STATE_BUFFERING -> PlaybackPhase.PAUSED
@@ -431,6 +486,7 @@ class Media3MainPlayerController(
     private fun checkMainThread() { check(Looper.myLooper() == Looper.getMainLooper()) { "Use the player on the main thread" } }
 
     private companion object {
+        const val UNSUPPORTED_FORMAT_MESSAGE = "This video format is not supported on this device."
         val supportedSubtitleMimeTypes = setOf(MimeTypes.TEXT_VTT, MimeTypes.APPLICATION_TTML,
             MimeTypes.APPLICATION_SUBRIP, MimeTypes.TEXT_SSA)
     }

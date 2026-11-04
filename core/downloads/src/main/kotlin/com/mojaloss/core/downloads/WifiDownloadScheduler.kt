@@ -10,6 +10,8 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PersistableBundle
 import androidx.media3.exoplayer.offline.DownloadService
 import androidx.media3.exoplayer.scheduler.Requirements
@@ -47,11 +49,20 @@ class OfflineResumeJobService : JobService() {
         val wifiAllowed = capabilities != null && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
             capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
         // API 26-27 scheduler cannot express an actual Wi-Fi transport: check it before waking transfer work.
-        if (wifiOnly && !wifiAllowed) { jobFinished(params, true); return false }
+        if (wifiOnly && !wifiAllowed) return retryLater(params)
         return try {
             DownloadService.sendResumeDownloads(this, OfflineDownloadService::class.java, true)
             false
-        } catch (_: Exception) { jobFinished(params, true); false }
+        } catch (_: Exception) { retryLater(params) }
+    }
+
+    /**
+     * Returning false ends the job with no reschedule; calling jobFinished before that return is
+     * not a supported way to ask for one. Keep the job running, then finish it with a backoff retry.
+     */
+    private fun retryLater(params: JobParameters): Boolean {
+        Handler(Looper.getMainLooper()).post { jobFinished(params, true) }
+        return true
     }
     override fun onStopJob(params: JobParameters): Boolean = true
 }

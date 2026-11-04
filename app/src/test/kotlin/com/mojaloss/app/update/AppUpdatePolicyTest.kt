@@ -23,6 +23,22 @@ class AppUpdatePolicyTest {
         ).forEach { assertFalse(it, AppUpdatePolicy.exactAssetUrl(it, "JuelHossain", "MojaLoss", "v0.1.7", release.assetName)) }
     }
 
+    @Test fun repositoryNameCaseFollowsGitHubButTagAndAssetStayExact() {
+        val canonical = "https://github.com/junior-rahman/Mojaloss/releases/download/v0.1.9/MojaLoss-Sage-0.1.9-debug.apk"
+        assertTrue(AppUpdatePolicy.exactAssetUrl(canonical, AppUpdateManager.DEFAULT_OWNER, AppUpdateManager.DEFAULT_REPO,
+            "v0.1.9", "MojaLoss-Sage-0.1.9-debug.apk"))
+        assertTrue(AppUpdatePolicy.exactAssetUrl(canonical, "Junior-Rahman", "MojaLoss", "v0.1.9", "MojaLoss-Sage-0.1.9-debug.apk"))
+        listOf(
+            canonical.replace("/v0.1.9/", "/V0.1.9/"),
+            canonical.replace("/MojaLoss-Sage-0.1.9-debug.apk", "/mojaloss-sage-0.1.9-debug.apk"),
+            canonical.replace("/junior-rahman/", "/another-owner/"),
+            canonical.replace("/releases/download/", "/releases/download/extra/"),
+        ).forEach {
+            assertFalse(it, AppUpdatePolicy.exactAssetUrl(it, AppUpdateManager.DEFAULT_OWNER, AppUpdateManager.DEFAULT_REPO,
+                "v0.1.9", "MojaLoss-Sage-0.1.9-debug.apk"))
+        }
+    }
+
     @Test fun redirectAdmissionRejectsHostSuffixTricksInsecureTransportAndCredentials() {
         assertTrue(AppUpdatePolicy.allowedTransferUrl("https://release-assets.githubusercontent.com/github-production-release-asset/1/file?signature=temporary"))
         assertTrue(AppUpdatePolicy.allowedTransferUrl(release.downloadUrl))

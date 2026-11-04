@@ -55,6 +55,9 @@ interface MediaRepository {
     suspend fun episodes(seriesId: String, season: Int?): OperationResult<List<MediaTitle>>
     suspend fun setFavorite(id: String, desired: Boolean): OperationResult<Boolean>
     suspend fun preparePlayback(id: String, fromStart: Boolean): OperationResult<PlaybackDescriptor>
+    /** A server-converted stream, used after this device could not decode the original file. */
+    suspend fun prepareCompatiblePlayback(id: String, fromStart: Boolean): OperationResult<PlaybackDescriptor> =
+        preparePlayback(id, fromStart)
     suspend fun reportPlayback(observation: PlaybackObservation)
     suspend fun prepareDownload(id: String): OperationResult<DownloadSource> =
         OperationResult.Failure("Downloads are not available here.", denied = true)
