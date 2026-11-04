@@ -40,7 +40,6 @@ class JellyfinMediaRepository(
     private val downloadCodecProbe: (container: String, streams: List<MediaStream>) -> Boolean = ::deviceSupportsDownload,
     /** Reported to the server as this client's version; the app passes its real build version. */
     private val clientVersion: String = "0.1.8",
-    private val playbackCodecProbe: () -> DeviceCodecs = ::probeDeviceCodecs,
 ) : MediaRepository {
     private val applicationContext = context.applicationContext
     private val storage = PrivateStorage(applicationContext)
@@ -97,7 +96,7 @@ class JellyfinMediaRepository(
     @Volatile private var collectionCache: TimedCollections? = null
     /** Measured once per process: decoder capabilities do not change while the app runs. */
     private val deviceStreamingProfile by lazy {
-        try { streamingProfile(playbackCodecProbe()) }
+        try { streamingProfile(probeDeviceCodecs()) }
         catch (_: Exception) { CONSERVATIVE_STREAMING_PROFILE }
         catch (_: LinkageError) { CONSERVATIVE_STREAMING_PROFILE }
     }
